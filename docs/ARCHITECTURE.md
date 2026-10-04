@@ -10,8 +10,15 @@ flowchart TD
     Queue --> Dispatcher[Atomic job claim / bounded concurrency]
     Dispatcher --> Process[Isolated Python worker process]
     Files --> Process
-    Process --> Profile[Data profiler: types, missing, duplicates, outliers, correlations, distributions]
-    Profile --> Detect[Problem detector: regression / classification / clustering]
+    Process --> Orchestrator[Conditional analysis orchestrator]
+    Orchestrator --> Profile[Advanced data profiler and immutable schema]
+    Profile --> Plan[Typed objective-driven planner]
+    Plan --> Analytics[Selected EDA / statistics / temporal analysis / anomalies / leakage]
+    Analytics --> Hypotheses[Exploratory hypotheses and effect sizes]
+    Hypotheses --> Decision{Is predictive ML useful and eligible?}
+    Decision -->|yes| Detect
+    Decision -->|no: recorded reason| Insights[Evidence-backed findings and rule-based confidence]
+    Detect[Problem detector: regression / classification / clustering]
     Detect --> Prepare[Preprocessing: imputation / encoding / scaling / date features]
     Prepare --> Select[Model selector: linear / tree / ensemble / neural; clustering candidates]
     Select --> Train[Training engine]
@@ -20,7 +27,9 @@ flowchart TD
     Compare --> Refit[Best model: refit on development data]
     Refit --> Evaluate[Prediction on untouched test rows]
     Evaluate --> Explain[Feature importance / SHAP / error analysis]
-    Explain --> Report[Final analysis report / optional grounded LLM explanation]
+    Explain --> Insights
+    Insights --> Recommendations[Evidence-linked recommended actions]
+    Recommendations --> Report[Computed analytical report / restricted optional LLM evidence ordering]
     Report --> Files
     Evaluate --> DB
     Files --> Predict[Cached complete pipeline / input validation]
@@ -35,6 +44,10 @@ flowchart TD
 **Durable state rather than an in-memory task list.** Job status, stages, progress, events, configuration, and result records are persisted. Conditional updates allow only one worker to claim a queued run. Jobs without updates for 30 minutes become failed with an explicit recovery message. Cancellation is cooperative between stages and prevents publication of cancelled artifacts.
 
 **Computed evidence before explanation.** Python calculates every statistic, visualization input, model score, and prediction. The optional LLM receives those results, not unrestricted execution access. Chat and report writing have deterministic fallback implementations.
+
+**Explicit analytical autonomy.** `planner.py` creates a typed plan from objective, profile, schema, temporal information and suitability. `orchestrator.py` executes only selected analyses, records decisions/skips and conditionally reuses AutoML. `statistics.py`, `hypothesis.py`, `time_series.py`, `anomalies.py` and `leakage.py` supply computed evidence. `insights.py`, `confidence.py`, and `recommendations.py` turn evidence into inspectable findings and actions. Descriptive runs have reports and evidence packages without fictional models.
+
+**Restricted optional LLM boundary.** The provider selects IDs of existing computed narrative blocks; it cannot create numerical prose, change metrics or execute code. Invalid IDs, extra fields and provider failures use the deterministic fallback. See `SECURITY.md` for the complete boundary.
 
 **Complete model contracts.** Saved artifacts bundle standard scikit-learn preprocessing and the estimator, plus target-label encoding and typed feature metadata. They can be loaded by the API or used with the exported standalone inference script.
 
@@ -55,6 +68,8 @@ flowchart TD
 | User | Account name, email, Argon2 password hash |
 | Dataset | Ownership, schema/profile, row/column counts, file metadata, SHA-256, Parquet path |
 | AnalysisRun | Dataset reference, objective, target, task, configuration, durable state, events |
+| Experiment | Owner, name, immutable dataset reference, creation time; run membership in configuration JSON |
+| Autonomous result | Typed plan/ML decision, evidence IDs, tests/effects, hypotheses, findings/confidence, recommendations, reproducibility |
 | Completed result | Model comparison, test metrics, diagnostics, importance, input schema, exclusions, versions |
 | Artifact directory | Complete pipeline, reproducible contract, report, standalone script, ZIP |
 
@@ -75,20 +90,30 @@ GET    /api/dashboard
 GET    /api/datasets
 POST   /api/datasets                    multipart file upload
 POST   /api/datasets/demo?kind=churn
+POST   /api/datasets/demo?kind=temporal
 GET    /api/datasets/{id}
 GET    /api/datasets/{id}/preview?offset=0&limit=20
 GET    /api/datasets/{id}/scatter?x=feature_a&y=feature_b
 POST   /api/datasets/{id}/chat
+GET    /api/datasets/{id}/quality?target=outcome
 DELETE /api/datasets/{id}
 
 POST   /api/analysis-runs
+POST   /api/analysis-plans                owned objective/plan preview
 GET    /api/analysis-runs
 GET    /api/analysis-runs/{id}
 POST   /api/analysis-runs/{id}/cancel
 GET    /api/analysis-runs/{id}/report
+GET    /api/analysis-runs/{id}/download    model or descriptive evidence package
+POST   /api/analysis-runs/{id}/rerun
+
+POST   /api/experiments
+GET    /api/experiments
+GET    /api/experiments/{id}
 
 POST   /api/models/{run_id}/predict
 GET    /api/models/{run_id}/download
+POST   /api/models/{run_id}/scenario
 ```
 
 ### Analysis request
@@ -97,6 +122,7 @@ GET    /api/models/{run_id}/download
 {
   "dataset_id": "your-dataset-id",
   "objective": "Predict customer churn and explain its main factors",
+  "analysis_mode": "autonomous",
   "target": "churn",
   "task": "auto",
   "test_size": 0.2,
@@ -108,6 +134,10 @@ GET    /api/models/{run_id}/download
 ```
 
 Response: `202 Accepted`, with the run identifier and queued state. Poll the run endpoint for progress and results.
+
+The default `analysis_mode` remains `ml` for backward compatibility. Set `analysis_mode: "autonomous"` to use objective-driven analysis. Optional `experiment_id` groups same-dataset runs; `positive_label` controls the binary positive outcome. Autonomous descriptive results have `task: "descriptive"`, `model_name: null`, and an `analysis` evidence object. The model endpoints reject these runs; analytical report/package endpoints work.
+
+List clients can use `GET /api/analysis-runs?summary=true`; dashboard and experiment views use bounded summary payloads while the owned run-detail endpoint retains complete evidence. Existing run-table columns are preserved. `create_all` adds only the new experiment table; cached profiles upgrade lazily to schema version 4.
 
 ### Prediction request
 
@@ -129,6 +159,8 @@ All required feature keys must be present. Missing values may be represented by 
 ## Performance mechanisms
 
 - Profiling is computed at ingestion and cached in metadata.
+- Statistical workloads are bounded to 5,000 rows/24 selected pairs; Isolation Forest to 10,000 rows/12 dimensions.
+- Dense ML matrices have an explicit 1,200-input/~512 MiB contract; candidate suitability and skips are recorded.
 - Histogram/correlation profiling is bounded to a reproducible 10,000-row sample.
 - Scatter visualizations are bounded to 600 points.
 - Model-search training is sampled above 20,000 development rows; final refitting uses all development data.
@@ -140,3 +172,5 @@ All required feature keys must be present. Missing values may be represented by 
 - Nginx compresses responses and caches hashed static assets.
 
 These are concrete optimization mechanisms. Actual throughput depends on dataset width/cardinality, model candidates, concurrent workloads, and available CPU/RAM.
+
+The interface adds an objective/plan wizard, analytical findings/evidence/action views, visible trace, data-quality center, experiments/re-run and noncausal scenarios. The original model studio, training wizard, authentication, charts, themes and exports remain usable. See the dedicated autonomous/data-science/statistics/reproducibility documents for decision rules and assumptions.

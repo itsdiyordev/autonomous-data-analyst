@@ -1,6 +1,6 @@
 # Analytiq — Autonomous Data Analyst
 
-A working full-stack analytics application: upload tabular data, explore interactive visualizations, launch an autonomous ML workflow, compare models, explain predictions, and export a runnable solution.
+A working, objective-driven **Autonomous Data Analyst**: upload tabular data, ask an analytical question, inspect the selected plan, follow statistical/temporal evidence, and receive explainable findings and recommended next steps. Predictive objectives activate evaluated ML; descriptive questions can finish without a model. Existing model training, SHAP, prediction and runnable exports remain available.
 
 **Frontend:** React 19 + TypeScript + Vite + TanStack Query + Recharts.  
 **Backend:** FastAPI + SQLAlchemy + pandas + scikit-learn + isolated background worker processes.  
@@ -65,7 +65,7 @@ The variable must remain set for both commands. The application handles unsuppor
 - Registration and login with Argon2 password hashes and signed 24-hour JWTs.
 - Per-account dataset and model access.
 - CSV and XLSX/XLSM ingestion; up to 50 MB, 100,000 rows, and 200 columns.
-- Original-value preservation in Parquet, SHA-256 dataset identity, and cached profiling.
+- Immutable Parquet datasets, SHA-256 identity, cached advanced profiling, and documented non-finite-value normalization.
 - Paginated data preview, column inspection, missing values, duplicate records, IQR outliers, and quality insights.
 - A transparent quality score: `100 − missing-cell percentage − duplicate-row percentage`.
 - Searchable dataset library and analysis history.
@@ -81,7 +81,31 @@ The variable must remain set for both commands. The application handles unsuppor
 - Colored cluster projections and group profiles.
 - Responsive layouts, accessible dialogs, keyboard workspace search, and persistent light/dark themes.
 
-### Autonomous ML
+## Autonomous analysis and machine learning
+
+### Objective-driven analytical investigations
+
+Choose **Analyze data** on the dashboard or dataset explorer. The new three-step journey asks for data, an objective, and approval of an inspectable analytical plan:
+
+```text
+Objective → Dataset understanding → Typed plan → Selected analyses
+         → Statistics / hypotheses / temporal patterns / anomalies
+         → Explicit ML decision → Optional AutoML + explanations
+         → Evidence-backed findings → Confidence → Recommendations → Report
+```
+
+- Descriptive/diagnostic goals use appropriate EDA and statistics; quality-only questions skip unrelated workloads.
+- Ranked target suitability is heuristic and ambiguity does not force a target.
+- Pearson/Spearman, t/Welch/rank/group tests, chi-square/Fisher and effect sizes include assumptions and adjusted p-values.
+- Date-aware analyses include trends, missing periods, anomalies and evaluated naive/moving-average/exponential-smoothing forecasts.
+- Leakage, imbalance, calibration, CV stability and candidate eligibility are explicit review evidence.
+- Findings and recommendations reference computed evidence IDs; confidence is rule-based rather than an LLM opinion.
+- Objective & plan, Execution, Statistics & evidence, Recommendations and Report views progressively reveal the technical detail.
+- Experiments group related runs; **Re-run analysis** retains the objective/configuration and records the parent run.
+- Predictions include evaluation context; **What-if scenario** compares changed inputs as model estimates, not causal effects.
+- The Data quality center exposes actionable issues and outcome-specific leakage review. Datasets includes an optional time-series sample.
+
+### Preserved AutoML workflow
 
 Working engines support **classification, regression, and clustering** on tabular data. The interface guides users through choosing a dataset, defining a goal, and reviewing the training setup.
 
@@ -99,7 +123,7 @@ Working engines support **classification, regression, and clustering** on tabula
 
 Model-search budgets are checked between candidates. A candidate already running, final refitting, evaluation, and packaging can extend total execution beyond that budget. Long jobs do not run in API request handlers.
 
-Classification requires 2–20 classes with at least 8 examples per class. Training requires at least 40 distinct usable rows and supports up to 100 raw features. Clustering does not require a target; its group-quality scores are unsupervised measures rather than classification accuracy. Potential outliers are flagged and retained. SHAP uses a bounded test/background sample, with its method and sample sizes recorded.
+Classification requires 2–20 classes with at least 8 usable examples per class. Training requires at least 40 distinct usable rows and supports up to 100 raw features, with an explicit dense encoded-memory bound. Clustering does not require a target; its group-quality scores are unsupervised measures rather than classification accuracy. Potential outliers are flagged and retained. SHAP uses a bounded test/background sample, with its method and sample sizes recorded.
 
 ### Deployable outputs
 
@@ -121,7 +145,7 @@ OPENAI_API_KEY=your-key
 OPENAI_MODEL=gpt-4o-mini
 ```
 
-Restart the backend. Dataset chat and report writing then use an LLM grounded in computed evidence. An LLM failure falls back to the local evidence-based implementation. The LLM does not calculate model metrics, execute arbitrary code, or replace model evaluation. The ML plan is controlled by typed configuration and deterministic workflow modules.
+Restart the backend. The optional LLM selects/orders relevant existing computed narrative statements. Strict output validation rejects invented facts, unsupported evidence IDs and extra fields; the application renders the original deterministic statements. Provider failures fall back to computed explanations. Numerical analysis, planning, model selection, confidence and recommendations remain deterministic Python responsibilities.
 
 ## Agentation visual feedback
 
@@ -197,7 +221,7 @@ npm run test:e2e
 
 The browser tests use the running development frontend and backend by default. Set `PLAYWRIGHT_BASE_URL=http://localhost:8080` to test the single-container deployment instead. On Linux, Playwright may need browser system libraries (`npx playwright install --with-deps chromium`).
 
-Twelve backend tests cover file ingestion, account isolation, classification/regression/clustering, model families, cross-validation, SHAP, error analysis, outliers, date features, unseen categories, missing input values, invalid prediction inputs, cancellation, group/time separation, portable exported inference, and production static serving. Three browser scenarios exercise the desktop, mobile, and clustering workflows. See [the verification record](docs/VERIFICATION.md) for results, including Agentation feedback checks.
+Backend tests preserve the original workflows and add explicit autonomy, statistical/effect-size, forecast, quality/edge-case, imbalance/calibration, leakage, scenario, security, large-data bounds and reproducibility coverage. Six browser scenarios cover the original desktop/mobile/clustering flows plus diagnostic analysis, mobile forecasting and autonomous prediction. See [the verification record](docs/VERIFICATION.md) for actual results.
 
 ## Project structure
 
@@ -209,22 +233,43 @@ backend/
     config.py      # Environment-based settings
     db.py          # SQLAlchemy entities and durable job state
     data.py        # Ingestion, profiling, demo datasets
-    ml.py          # Full autonomous ML pipeline, cross-validation, clustering
+    evidence.py    # Typed plan, evidence, insight and recommendation contracts
+    planner.py     # Objective interpretation and conditional analysis decisions
+    orchestrator.py # Selected analytics and optional existing AutoML
+    statistics.py  # Tests, effects, intervals and multiple-testing correction
+    hypothesis.py  # Computed exploratory hypotheses
+    time_series.py # Trends, temporal diagnostics and evaluated forecasts
+    anomalies.py   # Bounded anomaly review with original rows retained
+    leakage.py     # Semantic, temporal and extreme-association review
+    model_assessment.py # Eligibility, imbalance, calibration and stability
+    insights.py    # Evidence-backed findings
+    confidence.py  # Transparent rule-based confidence and limitations
+    recommendations.py # Evidence-linked investigative actions
+    reports.py     # Computed analytical report sections
+    reproducibility.py # Dataset/configuration/runtime reproducibility contracts
+    paths.py       # Trusted artifact path containment
+    ml.py          # AutoML search, cross-validation and clustering
     features.py    # Portable date/categorical feature engineering
     explain.py     # SHAP and error/assignment analysis
     artifacts.py   # Detailed report and standalone solution export
     problem.py     # Regression/classification/clustering detection
     llm.py         # Optional grounded language-model integration
     worker.py      # Atomic job claiming and isolated execution
-    schemas.py    # Validated workflow and inference inputs
+    schemas.py     # Validated workflow and inference inputs
   tests/
 frontend/
   src/
-    pages/         # Overview, datasets, explorer, runs, model studio, settings
-    components/    # Charts, dialogs, upload and analysis workflows
+    pages/         # Dashboard, datasets, analyses, models, experiments, settings
+    components/    # Objective/plan, quality, evidence, charts and training workflows
   e2e/
 docs/ARCHITECTURE.md
 docs/DOCKER.md
+docs/AUTONOMOUS_ENGINE.md
+docs/DATA_SCIENCE.md
+docs/STATISTICS.md
+docs/SECURITY.md
+docs/REPRODUCIBILITY.md
+docs/VERIFICATION.md
 Dockerfile
 docker-compose.yml
 docker-compose.multi.yml
@@ -233,3 +278,14 @@ scripts/dev.py
 ```
 
 See [the architecture document](docs/ARCHITECTURE.md) for execution flow, persistence, and the API contract.
+
+## Engineering and academic documentation
+
+- [Autonomous decisions and execution](docs/AUTONOMOUS_ENGINE.md)
+- [Data science and academic concept map](docs/DATA_SCIENCE.md)
+- [Statistical methods and assumptions](docs/STATISTICS.md)
+- [Security boundaries and deployment limitations](docs/SECURITY.md)
+- [Reproducibility and experiments](docs/REPRODUCIBILITY.md)
+- [Repository audit and regression boundaries](docs/AUDIT.md)
+
+This is a rigorously tested portfolio/startup engineering prototype. Its deployment and analytical limitations are documented; it is not a claim of production certification or human-equivalent analysis in every domain.

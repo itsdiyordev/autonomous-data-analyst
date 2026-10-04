@@ -21,6 +21,7 @@ class SPAStaticFiles(StaticFiles):
                 raise
             response = await super().get_response("index.html", scope)
         if response.status_code in {200, 304}:
+            response.headers["Content-Security-Policy"] = "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; connect-src 'self'; frame-ancestors 'none'; base-uri 'self'; object-src 'none'"
             response.headers["Cache-Control"] = (
                 "public, max-age=31536000, immutable" if parts and parts[0] == "assets" else "no-cache"
             )

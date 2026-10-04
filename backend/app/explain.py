@@ -1,6 +1,8 @@
 import logging
 
 import numpy as np
+import pandas as pd
+from scipy.stats import spearmanr
 from sklearn.ensemble import HistGradientBoostingClassifier, HistGradientBoostingRegressor, RandomForestClassifier, RandomForestRegressor
 from sklearn.linear_model import LogisticRegression, Ridge
 from sklearn.metrics import classification_report
@@ -66,6 +68,22 @@ def shap_explanation(pipeline, X_background, X_test, task, features):
             feature = original_feature(name, features)
             totals[feature] = totals.get(feature, 0.0) + float(score)
         importance = sorted([{"feature": feature, "importance": score} for feature, score in totals.items()], key=lambda item: item["importance"], reverse=True)
+        directions = []
+        if task == "regression" or task == "classification" and (array.ndim == 2 or array.shape[-1] == 2):
+            directed = array[:, :, 1] if array.ndim == 3 else array
+            for feature in features:
+                raw_values = pd.to_numeric(foreground_frame[feature], errors="coerce").to_numpy(dtype=float)
+                matching = [index for index, name in enumerate(names) if original_feature(name, features) == feature]
+                if not matching:
+                    continue
+                contribution = directed[:, matching].sum(axis=1)
+                usable = np.isfinite(raw_values) & np.isfinite(contribution)
+                if usable.sum() < 8 or np.std(raw_values[usable]) == 0 or np.std(contribution[usable]) == 0:
+                    continue
+                coefficient = float(spearmanr(raw_values[usable], contribution[usable]).statistic)
+                if abs(coefficient) >= 0.5:
+                    directions.append({"feature": feature, "direction": "higher values associated with higher explained output" if coefficient > 0 else "higher values associated with lower explained output", "coefficient": coefficient,
+                                       "sample_rows": int(usable.sum()), "output": "positive-class output" if task == "classification" else "predicted target", "evidence": "Spearman association between observed numeric values and their sampled SHAP contributions", "limitation": "Descriptive small-sample direction, not a general monotonic guarantee or causal effect."})
         predicted = pipeline.predict(foreground_frame)
         examples = []
         for index, row in enumerate(array):
@@ -79,8 +97,8 @@ def shap_explanation(pipeline, X_background, X_test, task, features):
             examples.append({"row_index": int(foreground_frame.index[index]), "prediction": safe_json(predicted[index]),
                              "contributions": sorted([{"feature": feature, "value": score} for feature, score in contributions.items()], key=lambda item: abs(item["value"]), reverse=True)})
         return safe_json({"status": "completed", "method": method, "output": output,
-                          "sample_rows": len(foreground), "background_rows": len(background),
-                          "feature_importance": importance, "examples": examples})
+                           "sample_rows": len(foreground), "background_rows": len(background),
+                           "feature_importance": importance, "examples": examples, "directions": directions})
     except Exception as exc:
         logger.exception("SHAP explanation failed")
         return {"status": "failed", "reason": str(exc)[:250], "feature_importance": [], "examples": []}

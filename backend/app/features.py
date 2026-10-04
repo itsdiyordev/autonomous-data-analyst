@@ -12,7 +12,7 @@ def date_columns(frame):
         series = frame[name]
         if pd.api.types.is_datetime64_any_dtype(series):
             result.append(name)
-        elif not pd.api.types.is_numeric_dtype(series) and re.search(r"date|timestamp|(^|_)time($|_)", name, re.I):
+        elif not pd.api.types.is_numeric_dtype(series) and (re.search(r"date|timestamp|(^|_)time($|_)", name, re.I) or series.dropna().head(80).astype(str).str.match(r"^\d{4}[-/]\d{1,2}[-/]\d{1,2}").mean() >= 0.9):
             sample = series.dropna().head(80)
             if len(sample) and pd.to_datetime(sample, errors="coerce", utc=True, format="mixed").notna().mean() >= 0.9:
                 result.append(name)

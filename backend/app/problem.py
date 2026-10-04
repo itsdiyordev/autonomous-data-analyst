@@ -1,6 +1,43 @@
 import re
 
 from .data import infer_task
+from .evidence import TargetCandidate
+
+
+def rank_targets(profile, objective=""):
+    """Transparent suitability ranking; scores are deliberately not called probabilities."""
+    text = re.sub(r"[^a-z0-9]+", " ", objective.lower())
+    candidates = []
+    semantic = {"target", "label", "outcome", "sales", "revenue", "profit", "price", "churn", "demand", "risk"}
+    for column in profile["columns"]:
+        if column.get("constant") or column.get("possible_id") or column["unique"] < 2 or column["kind"] == "datetime":
+            continue
+        name = column["name"]
+        tokens = set(re.sub(r"[^a-z0-9]+", " ", name.lower()).split())
+        normalized = " ".join(re.sub(r"[^a-z0-9]+", " ", name.lower()).split())
+        match = bool(normalized and re.search(r"\b" + re.escape(normalized) + r"\b", text)) or bool(tokens & set(text.split()) & semantic)
+        score, reasons = 0.2, []
+        if column["kind"] == "numeric":
+            score += 0.15
+            reasons.append("Varying numeric measurements can support quantitative analysis.")
+        elif column["unique"] <= 20:
+            score += 0.1
+            reasons.append("Repeated categories can support a classification outcome.")
+        else:
+            continue
+        if tokens & semantic:
+            score += 0.2
+            reasons.append("The column name resembles a common analytical outcome.")
+        if match:
+            score += 0.4
+            reasons.append("The objective explicitly refers to this column or outcome.")
+        if column["missing_pct"] > 30:
+            score -= 0.2
+            reasons.append("High missingness reduces target suitability.")
+        task = "classification" if column["kind"] != "numeric" or (column["unique"] <= 15 and column["unique"] / max(profile["rows"], 1) < 0.1) else "regression"
+        score = round(min(1, max(0, score)), 2)
+        candidates.append(TargetCandidate(name=name, task=task, score=score, confidence="HIGH" if score >= 0.85 else "MEDIUM" if score >= 0.6 else "LOW", reasons=reasons))
+    return sorted(candidates, key=lambda candidate: (-candidate.score, candidate.name))[:8]
 
 
 def detect_problem(frame, objective, requested_task="auto", target=None):

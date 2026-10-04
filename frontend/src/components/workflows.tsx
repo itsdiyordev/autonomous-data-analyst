@@ -68,9 +68,10 @@ export function AnalysisModal({ initialDataset, close }: { initialDataset?: stri
     if (!detail.data?.profile || initializedDataset.current === detail.data.id) return
     initializedDataset.current = detail.data.id
     const columns = detail.data.profile.columns
-    const candidate = columns.find(column => ['churn', 'monthly_revenue', 'price', 'target', 'label'].includes(column.name.toLowerCase())) || columns[columns.length - 1]
-    setTarget(candidate.name)
-    setObjective(`Predict ${candidate.name.replaceAll('_', ' ')} and explain the most important factors.`)
+    const ranked = detail.data.profile.target_candidates?.find(candidate => candidate.score >= 0.75)
+    const candidate = columns.find(column => ['churn', 'monthly_revenue', 'price', 'target', 'label'].includes(column.name.toLowerCase())) || columns.find(column => column.name === ranked?.name)
+    setTarget(candidate?.name || '')
+    setObjective(candidate ? `Predict ${candidate.name.replaceAll('_', ' ')} and explain the most important factors.` : 'Find groups of similar records and explain each group.')
     setSplitColumn('')
   }, [detail.data])
   const create = useMutation({

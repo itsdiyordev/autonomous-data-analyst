@@ -22,6 +22,10 @@ def client():
 @pytest.fixture
 def auth(client):
     import secrets
+    from app.main import rate_buckets
+    # Each fixture is an independent simulated user session; isolate rate state.
+    # Dedicated security tests exercise exhaustion inside one fixture/session.
+    rate_buckets.clear()
     response = client.post("/api/auth/register", json={"email": f"user-{secrets.token_hex(4)}@example.com", "name": "Test Analyst", "password": "correct-horse-2026"})
     assert response.status_code == 201, response.text
     return {"Authorization": f"Bearer {response.json()['token']}"}

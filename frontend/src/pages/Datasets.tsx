@@ -21,7 +21,7 @@ export default function Datasets() {
     queryClient.invalidateQueries({ queryKey: ['dashboard'] })
   }
   const demo = useMutation({
-    mutationFn: () => api('/datasets/demo?kind=churn', { method: 'POST' }),
+    mutationFn: (kind: string) => api(`/datasets/demo?kind=${kind}`, { method: 'POST' }),
     onSuccess: () => { refresh(); toast.success('Sample customer dataset added') }, onError: (error: Error) => toast.error(error.message),
   })
   const deletion = useMutation({
@@ -32,7 +32,7 @@ export default function Datasets() {
 
   return <>
     <PageHeading eyebrow="STEP 1 · YOUR DATA" title="All your data, in one place." text="Upload a spreadsheet, explore its charts, or use it to train a model." actions={<button className="button primary" onClick={openUpload}><Plus size={18} />Upload dataset</button>} />
-    <div className="page-guide"><span className="guide-icon"><Database size={20} /></span><div><strong>Start with a CSV or Excel file.</strong><p>Each dataset gets an explorer with distributions, relationships, and a data-quality summary.</p></div><button className="button secondary" disabled={demo.isPending} onClick={() => demo.mutate()}><Sparkles size={16} />{demo.isPending ? 'Adding sample…' : 'Try sample data'}</button></div>
+    <div className="page-guide"><span className="guide-icon"><Database size={20} /></span><div><strong>Start with a CSV or Excel file.</strong><p>Each dataset gets an explorer with distributions, relationships, and a data-quality summary.</p></div><button className="button secondary" disabled={demo.isPending} onClick={() => demo.mutate('churn')}><Sparkles size={16} />{demo.isPending ? 'Adding sample…' : 'Try sample data'}</button><button className="button secondary" disabled={demo.isPending} onClick={() => demo.mutate('temporal')}>Try time-series sample</button></div>
     <div className="collection-toolbar">
       <div className="search-input"><Search size={18} /><input aria-label="Search datasets" placeholder="Search datasets or filenames…" value={search} onChange={event => setSearch(event.target.value)} /></div>
       <div className="toolbar-right"><span className="collection-count">{data.length} {data.length === 1 ? 'dataset' : 'datasets'}</span><div className="view-toggle"><button className={grid ? 'active' : ''} aria-label="Grid view" aria-pressed={grid} onClick={() => setGrid(true)}><Grid2X2 size={18} /></button><button className={!grid ? 'active' : ''} aria-label="List view" aria-pressed={!grid} onClick={() => setGrid(false)}><List size={19} /></button></div></div>

@@ -36,6 +36,10 @@ ENV PATH="/app/backend/.venv/bin:$PATH" \
     STATIC_DIR=/app/frontend/dist \
     WORKER_MODE=embedded \
     MAX_WORKERS=2 \
+    OPENBLAS_NUM_THREADS=1 \
+    OMP_NUM_THREADS=1 \
+    MKL_NUM_THREADS=1 \
+    NUMBA_NUM_THREADS=1 \
     CORS_ORIGINS=http://localhost:8080,http://127.0.0.1:8080
 USER analyst
 EXPOSE 8080

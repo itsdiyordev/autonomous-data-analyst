@@ -10,7 +10,7 @@ import { Empty, ErrorState, Loading, PageHeading, Panel, Status, ViewLink } from
 import { goalText } from '../presentation'
 
 export default function Dashboard() {
-  const { user, openAnalysis, openUpload } = useWorkspace()
+  const { user, openAnalysis, openAutonomous, openUpload } = useWorkspace()
   const navigate = useNavigate()
   const [datasetId, setDatasetId] = useState('')
   const [columnName, setColumnName] = useState('')
@@ -24,7 +24,7 @@ export default function Dashboard() {
   const profile = detail.data?.profile
   const distribution = profile?.columns.find(column => column.name === columnName)
     || profile?.columns.find(column => column.kind === 'numeric') || profile?.columns[0]
-  const readyModel = runs.find(run => run.status === 'completed')
+  const readyModel = runs.find(run => run.status === 'completed' && run.task !== 'descriptive')
   const activeRun = runs.find(run => ['queued', 'running'].includes(run.status))
   const hour = new Date().getHours()
   const greeting = hour < 12 ? 'Good morning' : hour < 18 ? 'Good afternoon' : 'Good evening'
@@ -32,28 +32,29 @@ export default function Dashboard() {
   return <>
     <PageHeading eyebrow="YOUR ANALYTICS WORKSPACE" title={`${greeting}, ${user.name.split(' ')[0]}`} text="A clear view of your data, your models, and what to do next." actions={<>
       <button className="button secondary" onClick={openUpload}><UploadCloud size={17} />Upload dataset</button>
-      <button className="button primary" onClick={() => openAnalysis()}><Plus size={17} />Train a model</button>
+      <button className="button secondary" onClick={() => openAnalysis()}><Plus size={17} />Train a model</button>
+      <button className="button primary" onClick={() => openAutonomous()}><Sparkles size={17} />Analyze data</button>
     </>} />
 
     <section className="dashboard-hero">
       <div className="hero-copy">
         <span className="hero-eyebrow"><span className="hero-status-dot" />YOUR AUTONOMOUS DATA ANALYST</span>
         <h2>Your data.<br /><span>Clearly understood.</span></h2>
-        <p>Explore the patterns. Build a prediction model.<br />Turn what you learn into your next decision.</p>
+        <p>Ask a question. Inspect the autonomous plan.<br />Follow the evidence into your next decision.</p>
         <div className="hero-actions">
-          <button className="button hero-primary" onClick={() => datasets.length ? openAnalysis(selected?.id) : openUpload()}>
-            {datasets.length ? <Sparkles size={17} /> : <UploadCloud size={17} />}{datasets.length ? 'Build your next model' : 'Upload your first dataset'}<ArrowRight size={17} />
+          <button className="button hero-primary" onClick={() => datasets.length ? openAutonomous(selected?.id) : openUpload()}>
+            {datasets.length ? <Sparkles size={17} /> : <UploadCloud size={17} />}{datasets.length ? 'Start an analytical investigation' : 'Upload your first dataset'}<ArrowRight size={17} />
           </button>
           {datasets.length > 0 && <Link to={`/datasets/${selected!.id}`} className="hero-secondary">Explore your data<ArrowUpRight size={16} /></Link>}
         </div>
         <div className="hero-proof"><ShieldCheck size={14} /><span>Real calculations. Reproducible models. Useful answers.</span></div>
       </div>
       <div className="hero-journey">
-        <div className="journey-heading"><span>FROM UPLOAD TO PREDICTION</span><span className="journey-pill">3 simple steps</span></div>
+        <div className="journey-heading"><span>FROM OBJECTIVE TO EVIDENCE</span><span className="journey-pill">3 simple steps</span></div>
         {[
           { title: 'Bring your data', text: 'Upload a CSV or Excel spreadsheet.', icon: Database, done: datasets.length > 0 },
-          { title: 'Understand the patterns', text: 'Explore charts, columns, and data quality.', icon: ChartIcon, done: false },
-          { title: 'Build a useful model', text: 'Compare models and make predictions.', icon: FlaskConical, done: stats.models > 0 },
+          { title: 'Ask your analytical question', text: 'The planner selects appropriate methods.', icon: ChartIcon, done: false },
+          { title: 'Inspect findings and actions', text: 'Evidence, confidence and optional evaluated ML.', icon: FlaskConical, done: runs.some(run => run.status === 'completed') },
         ].map((step, index) => <div className="journey-step" key={step.title}>
           <span className={`journey-icon ${step.done ? 'done' : ''}`}>{step.done ? <Check size={18} /> : <step.icon size={19} />}</span>
           <div><small>STEP 0{index + 1}</small><strong>{step.title}</strong><p>{step.text}</p></div>
@@ -90,7 +91,8 @@ export default function Dashboard() {
       <Panel title="What would you like to do?" subtitle="Pick a starting point. We’ll guide you from there." className="quick-actions-panel">
         {[
           { icon: UploadCloud, title: 'Upload a dataset', text: 'Add a CSV or Excel spreadsheet.', action: openUpload, color: 'purple' },
-          { icon: SearchIcon, title: 'Explore your data', text: 'View charts and check data quality.', action: () => selected ? navigate(`/datasets/${selected.id}`) : openUpload(), color: 'blue' },
+           { icon: SearchIcon, title: 'Explore your data', text: 'View charts and check data quality.', action: () => selected ? navigate(`/datasets/${selected.id}`) : openUpload(), color: 'blue' },
+           { icon: Sparkles, title: 'Ask the autonomous analyst', text: 'Objective → plan → findings → actions.', action: () => openAutonomous(selected?.id), color: 'purple' },
           { icon: FlaskConical, title: 'Train a prediction model', text: 'Choose a target and compare models.', action: () => openAnalysis(selected?.id), color: 'green' },
         ].map(action => <button className="quick-action" key={action.title} onClick={action.action}><span className={`stat-icon ${action.color}`}><action.icon size={21} /></span><span><strong>{action.title}</strong><small>{action.text}</small></span><ArrowUpRight size={17} /></button>)}
         <div className="next-step-card"><span className="eyebrow">RECOMMENDED NEXT STEP</span><strong>{readyModel ? 'Put your trained model to work' : datasets.length ? 'Choose what you want to predict' : 'Start with a dataset'}</strong><p>{readyModel ? 'Try a new record and see your model’s prediction.' : datasets.length ? 'For example: customer churn, a price, or sales revenue.' : 'Upload your own spreadsheet or add a sample from the datasets page.'}</p><button className="text-link" onClick={() => readyModel ? navigate(`/runs/${readyModel.id}`) : datasets.length ? openAnalysis(selected?.id) : openUpload()}>{readyModel ? 'Open model results' : datasets.length ? 'Set up a model' : 'Upload dataset'}<ArrowRight size={15} /></button></div>

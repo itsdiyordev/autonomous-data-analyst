@@ -18,8 +18,8 @@ class RegisterInput(BaseModel):
 
 
 class LoginInput(BaseModel):
-    email: str
-    password: str
+    email: str = Field(max_length=255)
+    password: str = Field(max_length=128)
 
 
 class RunInput(BaseModel):
@@ -32,6 +32,9 @@ class RunInput(BaseModel):
     split_strategy: Literal["random", "chronological", "group"] = "random"
     split_column: str | None = None
     cv_folds: int = Field(default=3, ge=2, le=5)
+    analysis_mode: Literal["ml", "autonomous"] = "ml"
+    experiment_id: str | None = None
+    positive_label: str | None = Field(default=None, max_length=255)
 
 
 class PredictInput(BaseModel):
@@ -40,3 +43,17 @@ class PredictInput(BaseModel):
 
 class ChatInput(BaseModel):
     question: str = Field(min_length=3, max_length=2000)
+
+
+class ScenarioInput(BaseModel):
+    record: dict
+    changes: dict = Field(min_length=1, max_length=20)
+
+
+class ExperimentInput(BaseModel):
+    name: str = Field(min_length=2, max_length=150)
+    dataset_id: str
+
+
+class RerunInput(BaseModel):
+    budget_seconds: int | None = Field(default=None, ge=30, le=600)

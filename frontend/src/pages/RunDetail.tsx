@@ -1,16 +1,17 @@
 import { useEffect, useState } from 'react'
-import { Link, useParams } from 'react-router-dom'
+import { Link, Navigate, useParams, useSearchParams } from 'react-router-dom'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { ArrowLeft, ArrowRight, Check, CheckCircle2, Clock3, Code2, Copy, Download, FileText, FlaskConical, LoaderCircle, Play, ShieldCheck, Sparkles, Trophy, X } from '../icons'
 import { toast } from 'sonner'
 import { api, download, label, metric, number } from '../api'
-import type { ModelResult, Run } from '../types'
+import type { ModelResult, PredictionResponse, Run, ScenarioResponse } from '../types'
 import { metrics as metricDescriptions, taskText } from '../presentation'
 import { ClusterPlot, CurveChart, ImportanceChart, ScatterPlot } from '../components/charts'
 import Pipeline from '../components/Pipeline'
 import { ClusterProfiles, ErrorEvidence, ShapEvidence } from '../components/ModelEvidence'
 import { ErrorState, Loading, PageHeading, Panel, Status } from '../components/ui'
 import { useWorkspace } from '../workspace'
+import { ModelReliability } from '../components/AnalyticalEvidence'
 
 const resultTabs = [
   { id: 'overview', title: 'Summary' }, { id: 'comparison', title: 'Model comparison' },
@@ -20,6 +21,7 @@ const resultTabs = [
 
 export default function RunDetail() {
   const { id } = useParams()
+  const [searchParams] = useSearchParams()
   const [tab, setTab] = useState('overview')
   const [downloading, setDownloading] = useState('')
   const queryClient = useQueryClient()
@@ -39,6 +41,7 @@ export default function RunDetail() {
   if (query.isLoading) return <Loading text="Loading the model build…" />
   if (query.error) return <ErrorState error={query.error} retry={() => query.refetch()} />
   const run = query.data!
+  if (run.config.analysis_mode === 'autonomous' && (run.task === 'descriptive' || !searchParams.has('studio'))) return <Navigate to={`/analysis/${run.id}`} replace />
   const result = run.result
   const secondaryMetric = result?.task === 'classification' ? 'accuracy' : result?.task === 'clustering' ? 'davies_bouldin' : 'mae'
   async function getArtifact(report = false) {
@@ -71,7 +74,8 @@ export default function RunDetail() {
       <div className="tabs" aria-label="Model result views">{resultTabs.map(item => <button key={item.id} onClick={() => setTab(item.id)} className={tab === item.id ? 'active' : ''} aria-pressed={tab === item.id}>{item.id === 'predictions' && <Play size={15} />}{item.title}</button>)}</div>
       {tab === 'overview' && <>
         <div className="model-winner"><span className="winner-icon"><Trophy size={27} /></span><div><span>SELECTED MODEL</span><h3>{result.model_name}</h3><p>{result.cross_validation?.status === 'completed' ? `Selected using ${result.cross_validation.folds}-fold ${result.cross_validation.strategy}.` : 'Selected on validation results.'} Final scores use unseen test data.</p></div><div className="winner-score"><small>{metricDescriptions[result.primary_metric]?.title || label(result.primary_metric)}</small><strong>{metric(result.primary_metric, result.metrics[result.primary_metric])}</strong></div></div>
-        <div className="results-help"><ShieldCheck size={19} /><div><strong>How to read these results.</strong> These scores describe performance on the separate test set. Hover an underlined metric name to see what it measures.</div></div>
+         <div className="results-help"><ShieldCheck size={19} /><div><strong>How to read these results.</strong> These scores describe performance on the separate test set. Hover an underlined metric name to see what it measures.</div></div>
+         <ModelReliability result={result} />
         <div className="metrics-grid">{Object.entries(result.metrics).filter(([name]) => name !== 'f1_macro').map(([name, value]) => <div className="metric-card" key={name}><span><abbr title={metricDescriptions[name]?.explanation}>{metricDescriptions[name]?.title || label(name)}</abbr></span><strong>{metric(name, value)}</strong><small>{name === 'clusters' ? 'Assigned test groups' : ['mae', 'rmse', 'davies_bouldin'].includes(name) ? 'Lower is better · test data' : 'Higher is better · test data'}</small></div>)}</div>
         <div className="dashboard-grid equal-grid">
           <Panel title="What influences the prediction?" subtitle="A larger bar means the model relies more on that column."><ImportanceChart data={result.feature_importance} /><div className="chart-explanation">Measured by shuffling one column at a time in test data and checking the score change.</div></Panel>
@@ -85,7 +89,7 @@ export default function RunDetail() {
       </>}
 
       {tab === 'comparison' && <Panel title="Compare the approaches" subtitle="Selection uses cross-validation means when available. Validation and test scores are kept distinct.">
-        <div className="table-scroll"><table className="data-table"><thead><tr><th>Model / family</th><th>Selection score</th><th>Validation {metricDescriptions[result.primary_metric]?.title || label(result.primary_metric)}</th><th>{metricDescriptions[secondaryMetric]?.title}</th><th>Training time</th><th>Configuration</th></tr></thead><tbody>{[...result.experiments].sort((a, b) => {
+        <div className="table-scroll"><table className="data-table"><thead><tr><th>Model / family</th><th>Selection score</th><th>Validation {metricDescriptions[result.primary_metric]?.title || label(result.primary_metric)}</th><th>{metricDescriptions[secondaryMetric]?.title}</th><th>Training time</th><th>Inference time</th><th>Suitability / configuration</th></tr></thead><tbody>{[...result.experiments].sort((a, b) => {
           if (a.status !== b.status) return a.status === 'completed' ? -1 : b.status === 'completed' ? 1 : 0
           return (result.task === 'regression' ? 1 : -1) * ((a.selection_score ?? a.validation_metrics?.[result.primary_metric] ?? 0) - (b.selection_score ?? b.validation_metrics?.[result.primary_metric] ?? 0))
         }).map(experiment => <tr key={experiment.name} className={experiment.name === result.model_name ? 'winner-row' : ''}>
@@ -93,7 +97,7 @@ export default function RunDetail() {
           <td>{experiment.status === 'completed' ? <>{metric(result.primary_metric, experiment.selection_score ?? experiment.validation_metrics[result.primary_metric])}<small className="cell-secondary">{experiment.cross_validation?.mean !== undefined ? `${experiment.cross_validation.folds} folds · SD ${experiment.cross_validation.std !== undefined ? metric(result.primary_metric, experiment.cross_validation.std) : '—'}` : 'Validation selection'}</small></> : <span className="text-amber">{experiment.status === 'skipped' ? 'Budget reached' : 'Could not train'}</span>}</td>
           <td>{experiment.status === 'completed' ? metric(result.primary_metric, experiment.validation_metrics[result.primary_metric]) : '—'}</td>
           <td>{experiment.status === 'completed' ? metric(secondaryMetric, experiment.validation_metrics[secondaryMetric]) : '—'}</td>
-          <td>{experiment.duration_seconds?.toFixed(2) || '—'}s</td><td><code className="params-code">{experiment.reason || experiment.error || JSON.stringify(experiment.parameters)}</code></td>
+          <td>{experiment.duration_seconds?.toFixed(2) || '—'}s</td><td>{experiment.inference_time ? `${(experiment.inference_time.seconds * 1000).toFixed(1)} ms / ${experiment.inference_time.rows} rows` : '—'}</td><td className="wrapping-cell"><p className="field-help">{experiment.suitability}</p><code className="params-code">{experiment.reason || experiment.error || JSON.stringify(experiment.parameters)}</code></td>
         </tr>)}</tbody></table></div>
         <div className="info-note"><CheckCircle2 size={18} /><span>{result.selection_note}</span></div>
       </Panel>}
@@ -131,16 +135,26 @@ function PredictionPlayground({ run }: { run: Run }) {
   const [values, setValues] = useState<Record<string, unknown>>(initial)
   const [batch, setBatch] = useState(false)
   const [json, setJson] = useState(JSON.stringify([initial], null, 2))
+  const [scenarioOpen, setScenarioOpen] = useState(false)
+  const [scenarioFeature, setScenarioFeature] = useState(result.input_schema[0]?.name || '')
+  const [scenarioValue, setScenarioValue] = useState('')
+  const record = () => Object.fromEntries(result.input_schema.map(feature => [feature.name, values[feature.name] === '' ? null : feature.type === 'number' ? Number(values[feature.name]) : values[feature.name]]))
   const prediction = useMutation({
     mutationFn: () => {
       let records: unknown
       if (batch) {
         try { records = JSON.parse(json) } catch { throw new Error('Enter a valid JSON array of records.') }
         if (!Array.isArray(records)) throw new Error('Batch input must be a JSON array.')
-      } else records = [Object.fromEntries(result.input_schema.map(feature => [feature.name, values[feature.name] === '' ? null : feature.type === 'number' ? Number(values[feature.name]) : values[feature.name]]))]
-      return api<{ predictions: { label?: string; value?: number; cluster?: number; probabilities?: Record<string, number> }[] }>(`/models/${run.id}/predict`, { method: 'POST', body: JSON.stringify({ records }) })
+      } else records = [record()]
+      return api<PredictionResponse>(`/models/${run.id}/predict`, { method: 'POST', body: JSON.stringify({ records }) })
     }, onError: (error: Error) => toast.error(error.message),
   })
+  const scenario = useMutation({ mutationFn: () => {
+    const field = result.input_schema.find(feature => feature.name === scenarioFeature)!
+    const value = scenarioValue === '' ? null : field.type === 'number' ? Number(scenarioValue) : scenarioValue
+    if (typeof value === 'number' && !Number.isFinite(value)) throw new Error('The scenario value must be a finite number.')
+    return api<ScenarioResponse>(`/models/${run.id}/scenario`, { method: 'POST', body: JSON.stringify({ record: record(), changes: { [scenarioFeature]: value } }) })
+  }, onError: (error: Error) => toast.error(error.message) })
   const exampleCode = `POST /api/models/${run.id}/predict\nAuthorization: Bearer <your-session-token>\nContent-Type: application/json\n\n${JSON.stringify({ records: [initial] }, null, 2)}`
 
   return <div className="prediction-layout">
@@ -153,8 +167,11 @@ function PredictionPlayground({ run }: { run: Run }) {
     </Panel>
     <div>
       <Panel title="Your prediction" subtitle="Live output from this trained model.">
+        <div className="prediction-context"><strong>{result.model_name}</strong><p>{result.task === 'regression' ? `Held-out expected error: RMSE ${result.metrics.rmse.toFixed(3)} target units.` : result.task === 'classification' ? `Positive outcome: ${result.positive_class || 'Multiclass'} · ${result.calibration ? `calibration ${result.calibration.status}` : 'calibration not recorded'}` : `Held-out group separation: ${result.metrics.silhouette.toFixed(3)}`}</p><small>This is an evaluated model estimate, not a guaranteed outcome. Raw probabilities are not automatically calibrated.</small>{prediction.data && <small>Model version: {prediction.data.model_version} · evaluated on {prediction.data.evaluation_context.test_rows} held-out rows</small>}</div>
+        <details className="analytical-detail"><summary>How this model uses your inputs</summary>{result.shap?.directions?.length ? result.shap.directions.slice(0, 5).map(item => <p key={item.feature}><strong>{label(item.feature)}:</strong> {item.direction}. {item.sample_rows} sampled SHAP rows; {item.limitation}</p>) : result.feature_importance.slice(0, 5).map(item => <p key={item.feature}>{label(item.feature)}: permutation score change {item.importance.toFixed(4)}.</p>)}<p>These are model-level explanations from held-out evidence, not a new local SHAP calculation for this input or a causal claim.</p></details>
         {prediction.data ? <div className="prediction-results" aria-live="polite">{prediction.data.predictions.slice(0, 20).map((item, index) => <div className="prediction-result" key={index}><span className="eyebrow">{prediction.data.predictions.length > 1 ? `RECORD ${index + 1}` : 'PREDICTED OUTCOME'}</span><strong>{item.label ?? number(item.value!)}</strong>{item.probabilities && <><div className="probability-bars">{Object.entries(item.probabilities).map(([name, value]) => <div key={name}><div><span>{name}</span><b>{(value * 100).toFixed(1)}%</b></div><div className="progress-track"><i style={{ width: `${value * 100}%` }} /></div></div>)}</div><p className="prediction-estimate-note">Model estimates for each possible outcome.</p></>}</div>)}{prediction.data.predictions.length > 20 && <p className="muted">Showing the first 20 of {prediction.data.predictions.length} predictions.</p>}</div> : <div className="prediction-placeholder"><FlaskConical size={35} /><h4>Your next prediction will appear here</h4><p>Complete the form and click Generate prediction.</p></div>}
       </Panel>
+      {!batch && <Panel title="Model-based scenarios" subtitle="Compare the current input with one changed value; this does not measure a causal effect."><button className="button secondary" onClick={() => setScenarioOpen(!scenarioOpen)}>{scenarioOpen ? 'Close scenario' : 'What-if scenario'}</button>{scenarioOpen && <form onSubmit={event => { event.preventDefault(); scenario.mutate() }}><label className="field">Change input column<select value={scenarioFeature} onChange={event => setScenarioFeature(event.target.value)}>{result.input_schema.map(feature => <option key={feature.name} value={feature.name}>{label(feature.name)}</option>)}</select></label><label className="field">Scenario value<input value={scenarioValue} onChange={event => setScenarioValue(event.target.value)} placeholder="Enter the changed input value" /></label><button className="button primary" disabled={scenario.isPending}>{scenario.isPending ? 'Comparing…' : 'Compare scenario'}</button>{scenario.error && <div className="inline-error" role="alert">{scenario.error.message}</div>}{scenario.data && <div className="scenario-result"><span className="eyebrow">MODEL-BASED SCENARIO</span><div><span>Current prediction<strong>{scenario.data.baseline.label ?? number(scenario.data.baseline.value!)}</strong></span><ArrowRight size={18} /><span>Changed-input prediction<strong>{scenario.data.scenario.label ?? number(scenario.data.scenario.value!)}</strong></span></div><p>{scenario.data.limitation}</p><small>{scenario.data.model_name} · version {scenario.data.model_version}</small></div>}</form>}</Panel>}
       <Panel title="Connect the model to your app" subtitle="Use the same prediction pipeline through the API." action={<button className="icon-button" aria-label="Copy API example" onClick={() => navigator.clipboard.writeText(exampleCode).then(() => toast.success('API example copied')).catch(() => toast.error('Clipboard is unavailable'))}><Copy size={17} /></button>}><details className="advanced-options"><summary>View API request example<span><Code2 size={15} /></span></summary><div><pre className="api-code">{exampleCode}</pre></div></details></Panel>
     </div>
   </div>

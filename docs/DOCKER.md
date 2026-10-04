@@ -83,7 +83,7 @@ npx playwright install chromium
 npm run test:e2e
 ```
 
-The three desktop, mobile, and clustering scenarios can target development or the packaged production frontend. They cover the guided training wizard, cross-validation comparison, SHAP, predictions, downloads, and responsive visualizations. The desktop workflow also reloads a client-side route and verifies API documentation links. See [the verification record](VERIFICATION.md) for the completed checks.
+The six desktop/mobile/clustering and autonomous diagnostic/forecast/prediction scenarios can target development or the packaged production frontend. They cover plans, evidence, recommendations, re-runs/experiments, guided training, CV, SHAP, evaluated scenarios, downloads and responsive visualizations. The desktop workflow also reloads a client-side route and verifies API documentation links. See [the verification record](VERIFICATION.md) for actual results.
 
 ## Stop, restart, and rebuild
 

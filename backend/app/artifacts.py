@@ -8,6 +8,7 @@ import joblib
 import numpy as np
 import pandas as pd
 import sklearn
+import scipy
 
 from .config import settings
 
@@ -15,17 +16,24 @@ from .config import settings
 def export_solution(run_id, package, result, name):
     directory = settings.data_dir / "models" / run_id
     directory.mkdir(exist_ok=True)
-    portable_app = directory / "app"
-    portable_app.mkdir(exist_ok=True)
-    (portable_app / "__init__.py").write_text("")
-    (portable_app / "features.py").write_text(Path(__file__).with_name("features.py").read_text(), encoding="utf-8")
-    joblib.dump(package, directory / "pipeline.joblib", compress=3)
+    if package:
+        portable_app = directory / "app"
+        portable_app.mkdir(exist_ok=True)
+        (portable_app / "__init__.py").write_text("")
+        (portable_app / "features.py").write_text(Path(__file__).with_name("features.py").read_text(), encoding="utf-8")
+        joblib.dump(package, directory / "pipeline.joblib", compress=3)
     for filename, data in (("metrics.json", result), ("input_schema.json", result["input_schema"]), ("pipeline.json", result["pipeline"])):
         (directory / filename).write_text(json.dumps(data, indent=2), encoding="utf-8")
-    (directory / "requirements.txt").write_text(f"scikit-learn=={sklearn.__version__}\npandas=={pd.__version__}\nnumpy=={np.__version__}\njoblib=={joblib.__version__}\n", encoding="utf-8")
-    (directory / "predict.py").write_text(STANDALONE_PREDICT, encoding="utf-8")
-    (directory / "README.md").write_text(f"# {name}: {package['task']} solution\n\nUse Python {platform.python_version()}.\n\n```bash\npip install -r requirements.txt\npython predict.py input.json\n```\n\nInput: JSON array matching input_schema.json. All feature keys are required; values may be null. Keep the included app/features.py module with the pipeline.\n\n{result['report']}\n", encoding="utf-8")
-    (directory / "Dockerfile").write_text('FROM python:3.12-slim\nWORKDIR /solution\nCOPY requirements.txt .\nRUN pip install --no-cache-dir -r requirements.txt\nCOPY . .\nENTRYPOINT ["python", "predict.py"]\n', encoding="utf-8")
+    if result.get("analysis"):
+        (directory / "analysis.json").write_text(json.dumps(result["analysis"], indent=2), encoding="utf-8")
+        (directory / "reproducibility.json").write_text(json.dumps(result["analysis"]["reproducibility"], indent=2), encoding="utf-8")
+    if package:
+        (directory / "requirements.txt").write_text(f"scikit-learn=={sklearn.__version__}\nscipy=={scipy.__version__}\npandas=={pd.__version__}\nnumpy=={np.__version__}\njoblib=={joblib.__version__}\n", encoding="utf-8")
+        (directory / "predict.py").write_text(STANDALONE_PREDICT, encoding="utf-8")
+        (directory / "README.md").write_text(f"# {name}: {package['task']} solution\n\nUse Python {platform.python_version()}.\n\n```bash\npip install -r requirements.txt\npython predict.py input.json\n```\n\nInput: JSON array matching input_schema.json. All feature keys are required; values may be null. Keep the included app/features.py module with the pipeline. Only load trusted, server-generated pipeline artifacts; joblib is not a safe format for untrusted input.\n\n{result['report']}\n", encoding="utf-8")
+        (directory / "Dockerfile").write_text('FROM python:3.12-slim\nWORKDIR /solution\nCOPY requirements.txt .\nRUN pip install --no-cache-dir -r requirements.txt\nCOPY . .\nENTRYPOINT ["python", "predict.py"]\n', encoding="utf-8")
+    else:
+        (directory / "README.md").write_text(f"# {name}: analytical evidence\n\nNo predictive model was required. This package contains computed evidence, the report and the reproducibility contract.\n\n{result['report']}", encoding="utf-8")
     (directory / "report.html").write_text(build_report_html(name, result), encoding="utf-8")
     with zipfile.ZipFile(directory / "solution.zip", "w", compression=zipfile.ZIP_DEFLATED) as archive:
         for file in directory.rglob("*"):
@@ -35,6 +43,9 @@ def export_solution(run_id, package, result, name):
 
 
 def build_report_html(name, result):
+    if result.get("analysis"):
+        sections = "".join(f"<section><h2>{html.escape(section['title'])}</h2><pre>{html.escape(section['text'])}</pre></section>" for section in result["analysis"]["report_sections"])
+        return f'<!doctype html><html><head><meta charset="utf-8"><title>{html.escape(name)} — Analytical report</title><style>body{{font:15px system-ui;max-width:1100px;margin:40px auto;padding:24px;color:#292c43;background:#f7f8fc}}section{{background:white;border:1px solid #e9ebf3;border-radius:14px;padding:24px;margin:24px 0}}pre{{font:inherit;line-height:1.8;white-space:pre-wrap;overflow-wrap:anywhere}}</style></head><body><header><small>ANALYTIQ / AUTONOMOUS ANALYTICAL REPORT</small><h1>{html.escape(name)}</h1></header>{sections}</body></html>'
     score_cards = "".join(f"<div class='metric'><strong>{html.escape(key.upper())}</strong><span>{value:.4f}</span></div>" for key, value in result["metrics"].items())
     pipeline = "".join(f"<li><strong>{html.escape(stage['name'])}</strong><p>{html.escape(stage['detail'])}</p></li>" for stage in result["pipeline"])
     comparisons = "".join(f"<tr><td>{html.escape(experiment['name'])}</td><td>{html.escape(experiment['family'])}</td><td>{html.escape(experiment['status'])}</td><td>{experiment.get('selection_score', '—')}</td></tr>" for experiment in result["experiments"])
@@ -74,5 +85,5 @@ for col in package["categorical"]:
 prediction = package["pipeline"].predict(frame)
 if package["encoder"] is not None:
     prediction = package["encoder"].inverse_transform(prediction.astype(int))
-print(json.dumps({"task": package["task"], "predictions": prediction.tolist()}, indent=2))
+print(json.dumps({"task": package["task"], "predictions": prediction.tolist(), "model_version": package.get("version"), "evaluation_context": package.get("evaluation_context")}, indent=2))
 '''

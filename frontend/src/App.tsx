@@ -17,18 +17,23 @@ const DatasetDetail = lazy(() => import('./pages/DatasetDetail'))
 const Runs = lazy(() => import('./pages/Runs'))
 const RunDetail = lazy(() => import('./pages/RunDetail'))
 const Settings = lazy(() => import('./pages/Settings'))
+const AutonomousModal = lazy(() => import('./components/AutonomousModal'))
+const AnalysisDetail = lazy(() => import('./pages/AnalysisDetail'))
+const Experiments = lazy(() => import('./pages/Experiments'))
 
 const navigation = [
   { to: '/', label: 'Dashboard', description: 'Your next step', icon: LayoutDashboard },
   { to: '/datasets', label: 'Datasets', description: 'Explore and visualize', icon: Database },
-  { to: '/analyses', label: 'Training history', description: 'Follow your model builds', icon: Activity },
+  { to: '/analyses', label: 'Analyses', description: 'Objectives, evidence, actions', icon: Activity },
   { to: '/models', label: 'Models & predictions', description: 'Use your trained models', icon: FlaskConical },
+  { to: '/experiments', label: 'Experiments', description: 'Compare and reproduce runs', icon: Activity },
 ]
 
 export default function App() {
   const [token, setToken] = useState(localStorage.getItem('analytiq-token'))
   const [upload, setUpload] = useState(false)
   const [analysis, setAnalysis] = useState<{ datasetId?: string } | null>(null)
+  const [autonomous, setAutonomous] = useState<{ datasetId?: string; experimentId?: string } | null>(null)
   const [sidebar, setSidebar] = useState(false)
   const [search, setSearch] = useState(false)
   const [term, setTerm] = useState('')
@@ -76,6 +81,7 @@ export default function App() {
   }, [])
   const closeUpload = useCallback(() => setUpload(false), [])
   const closeAnalysis = useCallback(() => setAnalysis(null), [])
+  const closeAutonomous = useCallback(() => setAutonomous(null), [])
   const closeSearch = useCallback(() => { setSearch(false); setTerm('') }, [])
 
   if (!token) return <Auth authenticated={(value, profile) => {
@@ -86,7 +92,7 @@ export default function App() {
   }} />
   if (!user.data) return <Loading />
 
-  const current = location.pathname.startsWith('/runs') ? 'Model results'
+  const current = location.pathname.startsWith('/analysis/') ? 'Autonomous analysis' : location.pathname.startsWith('/runs') ? 'Model results'
     : navigation.find(item => item.to !== '/' && location.pathname.startsWith(item.to))?.label
     || (location.pathname === '/settings' ? 'Settings' : 'Dashboard')
   const datasets = dashboard.data?.datasets || []
@@ -95,7 +101,7 @@ export default function App() {
   const matchingRuns = runs.filter(run => `${run.objective} ${run.target}`.toLowerCase().includes(term.toLowerCase())).slice(0, 6)
   const startModel = (datasetId?: string) => setAnalysis({ datasetId })
 
-  return <Workspace.Provider value={{ user: user.data, openUpload: () => setUpload(true), openAnalysis: startModel, signOut }}>
+  return <Workspace.Provider value={{ user: user.data, openUpload: () => setUpload(true), openAnalysis: startModel, openAutonomous: (datasetId, experimentId) => setAutonomous({ datasetId, experimentId }), signOut }}>
     <div className="app-shell">
       {sidebar && <button className="sidebar-scrim" aria-label="Close navigation" onClick={() => setSidebar(false)} />}
       <aside className={`sidebar ${sidebar ? 'open' : ''}`}>
@@ -114,14 +120,14 @@ export default function App() {
         </nav>
         <div className="sidebar-insight">
           <span className="sidebar-insight-icon"><Sparkles size={19} /></span>
-          <h4>Make your first prediction</h4>
-          <p>Choose your data. Tell us what to predict. We’ll compare the models.</p>
-          <button onClick={() => startModel()}>Train a model<ArrowRight size={15} /></button>
+          <h4>Ask an analytical question</h4>
+          <p>Choose the objective. Inspect the plan, evidence and next steps.</p>
+          <button onClick={() => setAutonomous({})}>Analyze data<ArrowRight size={15} /></button>
         </div>
         <div className="sidebar-bottom">
           <NavLink to="/settings" className={({ isActive }) => `nav-item compact ${isActive ? 'active' : ''}`}><SettingsIcon size={19} /><strong>Settings</strong></NavLink>
           <button className="nav-item compact" onClick={signOut}><LogOut size={19} /><strong>Sign out</strong></button>
-          <div className="sidebar-version"><span><i className={`live-dot ${health.error ? 'offline' : ''}`} />{health.error ? 'Connection unavailable' : health.data ? 'Connected to your engine' : 'Connecting…'}</span><span>v1.0</span></div>
+          <div className="sidebar-version"><span><i className={`live-dot ${health.error ? 'offline' : ''}`} />{health.error ? 'Connection unavailable' : health.data ? 'Connected to your engine' : 'Connecting…'}</span><span>v3.0</span></div>
         </div>
       </aside>
 
@@ -135,7 +141,7 @@ export default function App() {
             <button className="search-trigger" onClick={() => setSearch(true)} aria-label="Search workspace"><Search size={17} /><span>Search datasets and models</span><kbd><Command size={11} /> K</kbd></button>
             <div className="notifications" ref={notificationRef}>
               <button className="icon-button" aria-label="Notifications" aria-expanded={notifications} onClick={() => setNotifications(!notifications)}><Bell size={20} />{!!dashboard.data?.stats.active_runs && <i className="notification-dot" />}</button>
-              {notifications && <div className="notification-menu"><h4>Latest training activity</h4>
+              {notifications && <div className="notification-menu"><h4>Latest analysis activity</h4>
                 {runs.length ? runs.slice(0, 5).map(run => <button key={run.id} onClick={() => navigate(`/runs/${run.id}`)}>
                   <span className={`activity-dot ${run.status}`} /><div><strong>{goalText(run)}</strong><small>{run.stage}</small></div><Status status={run.status} />
                 </button>) : <p>No models in training yet. Start with a dataset.</p>}
@@ -150,7 +156,8 @@ export default function App() {
             <Routes>
               <Route path="/" element={<Dashboard />} /><Route path="/datasets" element={<Datasets />} />
               <Route path="/datasets/:id" element={<DatasetDetail />} /><Route path="/analyses" element={<Runs />} />
-              <Route path="/models" element={<Runs modelsOnly />} /><Route path="/runs/:id" element={<RunDetail />} />
+               <Route path="/models" element={<Runs modelsOnly />} /><Route path="/runs/:id" element={<RunDetail />} />
+               <Route path="/analysis/:id" element={<AnalysisDetail />} /><Route path="/experiments" element={<Experiments />} />
               <Route path="/settings" element={<Settings />} /><Route path="*" element={<Navigate to="/" replace />} />
             </Routes>
           </Suspense>
@@ -161,6 +168,7 @@ export default function App() {
 
     {upload && <UploadModal close={closeUpload} />}
     {analysis && <AnalysisModal initialDataset={analysis.datasetId} close={closeAnalysis} />}
+    {autonomous && <Suspense fallback={<Loading text="Opening the analyst…" />}><AutonomousModal initialDataset={autonomous.datasetId} experimentId={autonomous.experimentId} close={closeAutonomous} /></Suspense>}
     {search && <Modal title="Search your workspace" subtitle="Find a dataset or a previous model build." close={closeSearch}>
       <div className="search-input full-search"><Search size={18} /><input autoFocus placeholder="Search by name, file, or prediction target…" value={term} onChange={event => setTerm(event.target.value)} /><button className="icon-button" aria-label="Clear search" onClick={() => setTerm('')}><X size={16} /></button></div>
       <div className="search-results">

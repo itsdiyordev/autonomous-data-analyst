@@ -27,5 +27,5 @@ export async function download(path: string, filename: string) {
 
 export const number = (value: number) => new Intl.NumberFormat('en', { notation: value >= 1000000 ? 'compact' : 'standard', maximumFractionDigits: 1 }).format(value)
 export const date = (value: string) => new Date(value.endsWith('Z') || value.includes('+') ? value : value + 'Z').toLocaleDateString('en', { month: 'short', day: 'numeric' })
-export const metric = (name: string, value: number) => name === 'clusters' ? String(Math.round(value)) : ['accuracy', 'f1', 'precision', 'recall', 'f1_macro', 'roc_auc', 'pr_auc'].includes(name) ? `${(value * 100).toFixed(1)}%` : value.toFixed(3)
+export const metric = (name: string, value: number) => !Number.isFinite(value) ? '—' : name === 'clusters' ? String(Math.round(value)) : ['accuracy', 'balanced_accuracy', 'f1', 'precision', 'recall', 'positive_precision', 'positive_recall', 'f1_macro', 'roc_auc', 'pr_auc'].includes(name) ? `${(value * 100).toFixed(1)}%` : value.toFixed(3)
 export const label = (value: string) => value.replaceAll('_', ' ').replace(/\b\w/g, c => c.toUpperCase())

@@ -7,15 +7,17 @@ import type { Dataset } from '../types'
 import { useWorkspace } from '../workspace'
 import { CorrelationHeatmap, DistributionChart, ScatterPlot } from '../components/charts'
 import { Empty, ErrorState, Loading, PageHeading, Panel } from '../components/ui'
+import DataQuality from '../components/DataQuality'
 
 const tabs = [
   { id: 'explore', title: 'Charts & insights' }, { id: 'table', title: 'Data table' },
-  { id: 'schema', title: 'Columns' }, { id: 'assistant', title: 'Ask a question', icon: MessageSquare },
+   { id: 'schema', title: 'Columns' }, { id: 'assistant', title: 'Ask a question', icon: MessageSquare },
+   { id: 'quality', title: 'Data quality' },
 ]
 
 export default function DatasetDetail() {
   const { id } = useParams()
-  const { openAnalysis } = useWorkspace()
+  const { openAnalysis, openAutonomous } = useWorkspace()
   const [tab, setTab] = useState('explore')
   const [columnName, setColumnName] = useState('')
   const [x, setX] = useState('')
@@ -57,7 +59,7 @@ export default function DatasetDetail() {
 
   return <>
     <Link to="/datasets" className="back-link"><ArrowLeft size={16} />Back to datasets</Link>
-    <PageHeading eyebrow="STEP 2 · EXPLORE YOUR DATA" title={dataset.name} text={`${dataset.filename} · Understand the data before you build a model.`} actions={<button className="button primary" onClick={() => openAnalysis(id)}><Sparkles size={17} />Train a model<ArrowRight size={16} /></button>} />
+    <PageHeading eyebrow="STEP 2 · EXPLORE YOUR DATA" title={dataset.name} text={`${dataset.filename} · Understand the data before you build a model.`} actions={<><button className="button secondary" onClick={() => openAutonomous(id)}><Sparkles size={17} />Analyze data</button><button className="button primary" onClick={() => openAnalysis(id)}><Sparkles size={17} />Train a model<ArrowRight size={16} /></button></>} />
     <div className="dataset-summary">
       <div><span className="summary-icon"><Database size={19} /></span><span><strong>{number(dataset.row_count)}</strong><small>Total rows</small></span></div>
       <div><span className="summary-icon"><Hash size={19} /></span><span><strong>{dataset.column_count}</strong><small>Columns</small></span></div>
@@ -94,6 +96,7 @@ export default function DatasetDetail() {
       <div className="table-scroll"><table className="data-table"><thead><tr><th>Column</th><th>Values</th><th>Distinct values</th><th>Missing values</th><th>IQR outliers</th><th>Examples</th></tr></thead><tbody>{profile!.columns.map(column => <tr key={column.name}><td><strong>{column.name}</strong></td><td><span className={`type-badge ${column.kind}`}>{column.kind === 'numeric' ? 'Numbers' : column.kind === 'datetime' ? 'Dates' : 'Categories'}</span></td><td>{number(column.unique)}</td><td><span className={column.missing_pct > 0 ? 'text-amber' : 'text-green'}>{column.missing_pct}%</span><small className="cell-secondary">{number(column.missing)} rows</small></td><td>{column.outliers !== undefined ? number(column.outliers) : '—'}</td><td className="example-cell">{column.examples.join(' · ')}</td></tr>)}</tbody></table></div>
       <div className="fingerprint"><ShieldCheck size={16} /><span>Dataset fingerprint <code>{dataset.fingerprint.slice(0, 32)}…</code></span></div>
     </Panel>}
+    {tab === 'quality' && <DataQuality dataset={dataset} />}
 
     {tab === 'assistant' && <Panel className="chat-panel">
       <div className="chat-intro"><span className="chat-bot-icon"><Bot size={29} /></span><span className="eyebrow">ASK YOUR DATA</span><h2>What would you like to understand?</h2><p>Ask about missing values, relationships, or a particular column.<br />Answers are based on the dataset’s calculated profile.</p></div>

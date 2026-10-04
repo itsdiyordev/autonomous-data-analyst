@@ -3,6 +3,7 @@ from functools import lru_cache
 from pathlib import Path
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic import Field
 
 
 class Settings(BaseSettings):
@@ -15,12 +16,12 @@ class Settings(BaseSettings):
     jwt_secret: str = ""
     cors_origins: str = "http://localhost:5173,http://127.0.0.1:5173"
     worker_mode: str = "embedded"
-    max_workers: int = 2
+    max_workers: int = Field(default=2, ge=1, le=4)
     enable_demo: bool = True
     openai_api_key: str = ""
     openai_model: str = "gpt-4o-mini"
-    max_upload_mb: int = 50
-    max_dataset_rows: int = 100_000
+    max_upload_mb: int = Field(default=50, ge=1, le=100)
+    max_dataset_rows: int = Field(default=100_000, ge=40, le=1_000_000)
 
 
 @lru_cache

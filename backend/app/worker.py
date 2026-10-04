@@ -10,7 +10,7 @@ from sqlalchemy import select, update
 
 from .config import settings
 from .db import AnalysisRun, SessionLocal, init_db, now
-from .ml import train_run
+from .orchestrator import execute_run
 
 logger = logging.getLogger(__name__)
 
@@ -65,7 +65,7 @@ async def dispatcher():
                 job_id = claim_job()
                 if not job_id:
                     break
-                active[pool.submit(train_run, job_id)] = job_id
+                active[pool.submit(execute_run, job_id)] = job_id
             await asyncio.sleep(1)
     finally:
         pool.shutdown(wait=False, cancel_futures=True)

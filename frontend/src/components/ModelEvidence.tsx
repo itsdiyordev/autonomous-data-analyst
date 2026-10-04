@@ -9,7 +9,7 @@ export function ShapEvidence({ result }: { result: ModelResult }) {
   const shap = result.shap
   if (shap?.status !== 'completed') return <Panel title="SHAP contributions"><Empty title="No SHAP explanation for this build" text={shap?.reason || 'This earlier model does not contain SHAP evidence. New builds include sampled SHAP explanations.'} /></Panel>
   const example = shap.examples[exampleIndex]
-  return <div className="dashboard-grid equal-grid">
+  return <><div className="dashboard-grid equal-grid">
     <Panel title="SHAP: feature contributions" subtitle={`${shap.method} · ${shap.sample_rows} sampled test rows`} action={<span className="small-tag">SHAP</span>}>
       <ImportanceChart data={shap.feature_importance} /><div className="chart-explanation">Average absolute contribution, combined back into the original input columns. Output: {shap.output}.</div>
     </Panel>
@@ -17,7 +17,7 @@ export function ShapEvidence({ result }: { result: ModelResult }) {
       {example && <ImportanceChart data={example.contributions.map(item => ({ feature: item.feature, importance: item.value }))} />}
       <div className="chart-explanation">Positive contributions increase the explained output; negative contributions decrease it. These are model contributions, not causal effects.</div>
     </Panel>
-  </div>
+  </div>{shap.directions?.length ? <Panel title="Supported feature directions" subtitle="Direction is measured from sampled SHAP contributions, never inferred from importance alone."><div className="table-scroll"><table className="data-table"><thead><tr><th>Feature</th><th>Observed direction</th><th>Evidence</th><th>Scope</th></tr></thead><tbody>{shap.directions.map(item => <tr key={item.feature}><td>{label(item.feature)}</td><td className="wrapping-cell">{item.direction}</td><td className="wrapping-cell">{item.evidence}<small className="cell-secondary">r = {item.coefficient.toFixed(3)} · {item.output}</small></td><td className="wrapping-cell">{item.sample_rows} sampled rows. {item.limitation}</td></tr>)}</tbody></table></div></Panel> : null}</>
 }
 
 export function ErrorEvidence({ result }: { result: ModelResult }) {

@@ -1,9 +1,12 @@
-export const statusText = (status: string) => ({ queued: 'Waiting', running: 'Training', completed: 'Ready', failed: 'Failed', cancelled: 'Cancelled' }[status] || status)
-export const taskText = (task: string) => task === 'clustering' ? 'Discover similar groups' : task === 'classification' ? 'Category prediction' : 'Numeric prediction'
-export const goalText = (run: { task: string; target: string }) => run.task === 'clustering' ? 'Discover similar groups' : `Predict ${run.target.replaceAll('_', ' ')}`
+export const statusText = (status: string) => ({ queued: 'Waiting', running: 'Analyzing', completed: 'Ready', failed: 'Failed', cancelled: 'Cancelled' }[status] || status)
+export const taskText = (task: string) => task === 'descriptive' ? 'Exploratory analysis' : task === 'clustering' ? 'Discover similar groups' : task === 'classification' ? 'Category prediction' : 'Numeric prediction'
+export const goalText = (run: { task: string; target: string; objective?: string }) => run.task === 'descriptive' ? run.objective || 'Explore the evidence' : run.task === 'clustering' ? 'Discover similar groups' : `Predict ${run.target.replaceAll('_', ' ')}`
 
 export const metrics: Record<string, { title: string; explanation: string }> = {
   accuracy: { title: 'Accuracy', explanation: 'The share of test examples with the correct predicted category. Higher is better.' },
+  balanced_accuracy: { title: 'Balanced accuracy', explanation: 'Recall averaged equally across classes, so minority outcomes are not overwhelmed by the majority.' },
+  positive_precision: { title: 'Positive precision', explanation: 'The share of predicted positive outcomes that are correct; the positive label is recorded.' },
+  positive_recall: { title: 'Positive recall', explanation: 'The share of actual positive outcomes detected by the classifier.' },
   f1: { title: 'F1 score', explanation: 'Balances precision and recall, weighted by class size. Higher is better.' },
   f1_macro: { title: 'Balanced F1', explanation: 'F1 averaged equally across categories, so small classes matter too. Higher is better.' },
   precision: { title: 'Precision', explanation: 'How often predicted categories are correct, averaged by class size. Higher is better.' },

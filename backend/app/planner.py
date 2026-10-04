@@ -11,13 +11,15 @@ def create_plan(profile, objective, target=None, requested_task="auto", config=N
     if target and target not in columns:
         raise ValueError("The selected target is not in this dataset.")
     text = objective.lower()
-    forecast = bool(re.search(r"forecast|future|next (month|week|day|period)", text))
+    forecast = requested_task != "clustering" and bool(re.search(r"forecast|future|next (month|week|day|period)", text))
     prediction = bool(re.search(r"predict|classif|estimate|model\b", text))
-    segments = requested_task == "clustering" or bool(re.search(r"cluster|segment|similar (customers|records|rows)", text))
+    segments = requested_task == "clustering" or requested_task == "auto" and bool(re.search(r"cluster|segment|similar (customers|records|rows)", text))
     quality_only = bool(re.search(r"missing|null|quality|duplicate|invalid|clean", text)) and not re.search(r"trend|relation|pattern|why|driver|predict|forecast|segment|compare|growth", text)
     intent = "forecast" if forecast else "segmentation" if segments else "predictive" if prediction else "quality" if quality_only else "diagnostic" if re.search(r"why|decreas|increas|driver|explain|difference", text) else "descriptive"
     ranked = rank_targets(profile, objective)
-    if not target and ranked and ranked[0].score >= 0.75 and (len(ranked) == 1 or ranked[0].score - ranked[1].score >= 0.1):
+    if segments:
+        target = None
+    if not segments and not target and ranked and ranked[0].score >= 0.75 and (len(ranked) == 1 or ranked[0].score - ranked[1].score >= 0.1):
         target = ranked[0].name
     numeric = [column["name"] for column in columns.values() if column["kind"] == "numeric" and not column.get("possible_id") and column["unique"] > 1]
     categories = [column["name"] for column in columns.values() if column["kind"] == "categorical" and 2 <= column["unique"] <= 20 and not column.get("possible_id")]
@@ -25,6 +27,12 @@ def create_plan(profile, objective, target=None, requested_task="auto", config=N
     task = "clustering" if segments else (next((item.task for item in ranked if item.name == target), "regression" if target in numeric else "classification") if target and prediction else "descriptive")
     if requested_task in {"regression", "classification"} and target:
         task, prediction = requested_task, True
+    if task == "classification" and target:
+        # A supplied classification task defines a nominal outcome even when its
+        # stored labels are numeric. Do not infer distances between label codes.
+        numeric = [name for name in numeric if name != target]
+        if target not in categories and 2 <= columns[target]["unique"] <= 20:
+            categories.insert(0, target)
     use_ml = segments or (prediction and target is not None and not forecast)
     reason = "Segmentation was requested; compare unsupervised group models." if segments else "A predictive objective and a suitable target were identified." if use_ml else "The forecasting objective uses chronological, evaluated time-series baselines rather than tabular AutoML." if forecast else "Machine learning was not used because the objective is descriptive/diagnostic or no reliable predictive target was identified."
     limitations = []

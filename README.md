@@ -248,6 +248,9 @@ backend/
     reports.py     # Computed analytical report sections
     reproducibility.py # Dataset/configuration/runtime reproducibility contracts
     paths.py       # Trusted artifact path containment
+    errors.py      # Structured public failures and safe analytical error codes
+    security.py    # Streaming body limits before JSON/multipart parsing
+    version.py     # Release identity for API and reproducibility contracts
     ml.py          # AutoML search, cross-validation and clustering
     features.py    # Portable date/categorical feature engineering
     explain.py     # SHAP and error/assignment analysis
@@ -287,5 +290,6 @@ See [the architecture document](docs/ARCHITECTURE.md) for execution flow, persis
 - [Security boundaries and deployment limitations](docs/SECURITY.md)
 - [Reproducibility and experiments](docs/REPRODUCIBILITY.md)
 - [Repository audit and regression boundaries](docs/AUDIT.md)
+- [Task 1 severity-ranked maintenance/security audit](docs/TASK_1_AUDIT.md)
 
 This is a rigorously tested portfolio/startup engineering prototype. Its deployment and analytical limitations are documented; it is not a claim of production certification or human-equivalent analysis in every domain.

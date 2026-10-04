@@ -21,6 +21,8 @@ from .reports import analytical_report
 from .reproducibility import metadata
 from .statistics import run_statistics
 from .time_series import analyze_temporal
+from .errors import encode_failure
+from .version import ENGINE_VERSION
 
 logger = logging.getLogger(__name__)
 
@@ -41,7 +43,7 @@ def execute_run(run_id):
     except Exception as exc:
         logger.exception("Analytical run failed")
         with SessionLocal() as db:
-            db.execute(update(AnalysisRun).where(AnalysisRun.id == run_id, AnalysisRun.status != "cancelled").values(status="failed", error=str(exc)[:1000], stage="Analysis failed", finished_at=now()))
+            db.execute(update(AnalysisRun).where(AnalysisRun.id == run_id, AnalysisRun.status == "running").values(status="failed", error=encode_failure(exc), stage="Analysis failed", finished_at=now()))
             db.commit()
 
 
@@ -56,7 +58,10 @@ def _analyze(run_id):
     evidence, hypotheses, model, package = [], [], None, None
     leakage = {"flags": []}
     selected = next((step.columns for step in plan.steps if step.kind == "associations"), [])
-    statistical_profile = {**profile, "columns": [{**column, "kind": "categorical"} if column["name"] == plan.target and next((candidate.task for candidate in plan.target_candidates if candidate.name == plan.target), None) == "classification" else column for column in profile["columns"]]}
+    outcome_task = config.get("requested_task", "auto")
+    if outcome_task == "auto":
+        outcome_task = plan.ml_decision.task if plan.ml_decision.use_ml else next((candidate.task for candidate in plan.target_candidates if candidate.name == plan.target), None)
+    statistical_profile = {**profile, "columns": [{**column, "kind": "categorical"} if column["name"] == plan.target and outcome_task == "classification" else column for column in profile["columns"]]}
     statistics_done = False
     for index, step in enumerate(plan.steps):
         if step.kind in {"insights", "recommendations", "report", "explainability"}:
@@ -117,6 +122,7 @@ def _analyze(run_id):
                           "association_matrix": [{"x": item.columns[0], "y": item.columns[1], "method": item.method, "value": item.values.get("effect_size"), "evidence_id": item.id} for item in evidence if item.kind in {"association", "group_difference"}]})
     result = model or {"model_name": None, "task": "descriptive", "target": plan.target, "metrics": {}, "experiments": [], "feature_importance": [], "input_schema": [], "pipeline": [], "classes": [], "seed": 42, "dataset_fingerprint": dataset.fingerprint, "version": "3.0"}
     result["analysis"] = analysis
+    result["engine_version"] = ENGINE_VERSION
     result["report"] = analytical_report(dataset.name, objective, analysis, model)
     result["report_source"] = "computed"
     result["llm_explanation"] = grounded_completion(objective, {"narrative_blocks": [{"id": item.id, "text": item.finding} for item in insights]})
@@ -129,7 +135,9 @@ def _analyze(run_id):
 def _save_plan(run_id, plan):
     with SessionLocal() as db:
         run = db.get(AnalysisRun, run_id)
-        if not run or run.status == "cancelled":
+        if not run or run.status != "running":
             raise Cancelled()
-        run.config = {**run.config, "analysis_plan": plan.model_dump()}
+        changed = db.execute(update(AnalysisRun).where(AnalysisRun.id == run_id, AnalysisRun.status == "running").values(config={**run.config, "analysis_plan": plan.model_dump()}))
+        if changed.rowcount != 1:
+            raise Cancelled()
         db.commit()

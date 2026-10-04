@@ -28,7 +28,7 @@ def current_user(
     if not credentials:
         raise HTTPException(401, "Please sign in to continue.")
     try:
-        payload = jwt.decode(credentials.credentials, settings.jwt_secret, algorithms=["HS256"])
+        payload = jwt.decode(credentials.credentials, settings.jwt_secret, algorithms=["HS256"], options={"require": ["sub", "exp", "iat"]})
         user = db.get(User, payload["sub"])
         if user is None:
             raise ValueError("Unknown user")

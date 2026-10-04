@@ -2,6 +2,8 @@
 
 The deterministic engine performs exploratory inference on up to 5,000 sampled rows and 24 schema/objective-selected column pairs. It uses pairwise complete cases and records sample/population sizes. A p-value is not a probability that a hypothesis is true, and significance does not establish causal impact.
 
+An explicit classification outcome is nominal even when stored as numeric label codes. Statistical comparisons use categorical/group methods for that outcome; its arbitrary codes are not used as numeric anomaly distances. This honors the existing task contract rather than inferring label meaning from numeric storage alone.
+
 | Variable types | Test / method | Effect / uncertainty |
 |---|---|---|
 | Numeric ↔ numeric | Pearson and Spearman | Correlation coefficient; Pearson Fisher-z 95% interval |

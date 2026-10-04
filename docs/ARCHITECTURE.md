@@ -1,5 +1,7 @@
 # Implemented architecture
 
+Current maintenance release: **3.0.1**. The Task 1 audit is documented in [TASK_1_AUDIT.md](TASK_1_AUDIT.md); it preserves the existing product architecture and corrects its error, state-transition and analytical contracts.
+
 ```mermaid
 flowchart TD
     User --> Web[React / TypeScript dashboard]
@@ -59,6 +61,8 @@ flowchart TD
 
 **Cross-validation and feature engineering.** Classification uses stratified folds, regression/clustering use shuffled folds, and group/time splits use matching fold strategies. Feature engineering and preprocessing are included in each cloned candidate pipeline and fitted inside the fold. Identifiers and high-cardinality free text are excluded. Date fields create year, month, weekday, and cyclic month features; numeric imputation learns missing-value indicators.
 
+Chronological holdouts and CV now keep equal timestamps together. Stable sorting preserves source columns, including names previously used for internal sorting. Actual split sizes can differ from requested proportions at timestamp boundaries. Insufficient date groups produce an explicit split error or recorded separate-validation fallback. Generated date-feature names cannot overwrite source columns.
+
 **Explainability.** Tree and linear winners use dedicated SHAP explainers. Other estimators and clustering use bounded model-agnostic permutation SHAP on numeric transformed inputs; encoded contributions are aggregated to original columns. The method, output units, sample sizes, and any explanation failure are recorded. Cluster ambiguity is reported separately from supervised prediction errors.
 
 ## Data entities
@@ -78,6 +82,31 @@ Dataset files are immutable after registration. Reuploading creates a new datase
 ## Public API
 
 All dataset/run/model endpoints require `Authorization: Bearer <token>`.
+
+### Error contract
+
+HTTP failures use a structured envelope:
+
+```json
+{
+  "error": {
+    "code": "VALIDATION_ERROR",
+    "message": "The request contains invalid values.",
+    "details": {"issues": [{"loc": ["body", "records"], "msg": "Invalid value", "type": "validation_error"}]}
+  },
+  "detail": [{"loc": ["body", "records"], "msg": "Invalid value", "type": "validation_error"}]
+}
+```
+
+`detail` is retained for existing FastAPI clients. Validation details omit submitted inputs/contexts; unexpected failures return a generic message and request ID rather than an exception/traceback. `errors.py` defines safe expected analytical failures such as `INSUFFICIENT_DATA`, `INVALID_SPLIT` and `RESOURCE_LIMIT`. Background failure objects are JSON-encoded inside the existing text column; run responses expose structured `failure` alongside the compatible safe string `error`. Old raw error strings are normalized to a safe rerun message. The frontend `ApiError` retains code/details/status and supports legacy responses.
+
+### Request, job and security boundaries
+
+`security.py` limits consumed ASGI body bytes before JSON/multipart parsing, including requests without Content-Length. General bodies are bounded to 2 MiB; dataset POST bodies permit the configured upload limit plus 2 MiB multipart overhead, and the file itself retains its configured cap. JWTs require subject, expiry and issue-time claims. Owned lookups precede storage/model access; uploaded serialized models are never accepted.
+
+The active-run quota check and insert share a transactional account lock. Parent-run metadata is present before queued work is committed. Cancellation uses a conditional queued/running update; progress, plan updates, failures and publication require `running`, preventing late writes to terminal states. The dispatcher replaces broken pools and retries transient SQL failures. Cancellation remains cooperative at analytical boundaries.
+
+The planner retains its existing deterministic heuristics but honors explicit task contracts: clustering is target-free, explicit supervised tasks retain their outcomes, and numeric classification labels are nominal for statistical tests and excluded from numeric anomaly distances. `version.py` supplies the patch engine identity used in reproducibility hashes. Database tables and artifact schema are unchanged by Task 1.
 
 ```text
 GET    /api/health
@@ -174,3 +203,7 @@ All required feature keys must be present. Missing values may be represented by 
 These are concrete optimization mechanisms. Actual throughput depends on dataset width/cardinality, model candidates, concurrent workloads, and available CPU/RAM.
 
 The interface adds an objective/plan wizard, analytical findings/evidence/action views, visible trace, data-quality center, experiments/re-run and noncausal scenarios. The original model studio, training wizard, authentication, charts, themes and exports remain usable. See the dedicated autonomous/data-science/statistics/reproducibility documents for decision rules and assumptions.
+
+## Verification and delivery
+
+No CI/CD workflow is checked in. Verification currently uses pytest/Ruff, TypeScript/Vite, Chromium E2E, dependency advisory scans, Docker builds and Compose validation. [VERIFICATION.md](VERIFICATION.md) records executed checks and distinguishes runtime verification from configuration-only checks. The single-container deployment is exercised; PostgreSQL/Nginx multi-service runtime and operational resilience require separate validation.

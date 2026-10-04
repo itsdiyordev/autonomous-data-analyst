@@ -2,15 +2,17 @@ import asyncio
 import logging
 import multiprocessing
 import time
-from concurrent.futures import ProcessPoolExecutor
+from concurrent.futures import Future, ProcessPoolExecutor
 from concurrent.futures.process import BrokenProcessPool
 from datetime import timedelta
 
 from sqlalchemy import select, update
+from sqlalchemy.exc import SQLAlchemyError
 
 from .config import settings
 from .db import AnalysisRun, SessionLocal, init_db, now
 from .orchestrator import execute_run
+from .errors import AnalysisError, encode_failure
 
 logger = logging.getLogger(__name__)
 
@@ -30,7 +32,7 @@ def recover_stale():
     # a user can rerun without publishing duplicate artifacts from an uncertain execution.
     cutoff = now() - timedelta(minutes=30)
     with SessionLocal() as db:
-        db.execute(update(AnalysisRun).where(AnalysisRun.status == "running", AnalysisRun.updated_at < cutoff).values(status="failed", error="The worker stopped responding. Please start a new analysis.", stage="Worker interrupted", finished_at=now()))
+        db.execute(update(AnalysisRun).where(AnalysisRun.status == "running", AnalysisRun.updated_at < cutoff).values(status="failed", error=encode_failure(AnalysisError("WORKER_INTERRUPTED", "The worker stopped responding. Please start a new analysis.")), stage="Worker interrupted", finished_at=now()))
         db.commit()
 
 
@@ -48,24 +50,48 @@ async def dispatcher():
                 except Exception as exc:
                     logger.exception("Worker process failed")
                     broken = broken or isinstance(exc, BrokenProcessPool)
-                    with SessionLocal() as db:
-                        db.execute(update(AnalysisRun).where(
-                            AnalysisRun.id == active[future], AnalysisRun.status == "running"
-                        ).values(status="failed", error="The worker process was interrupted. Please retry the analysis.",
-                                 stage="Worker interrupted", finished_at=now()))
-                        db.commit()
+                    try:
+                        with SessionLocal() as db:
+                            db.execute(update(AnalysisRun).where(
+                                AnalysisRun.id == active[future], AnalysisRun.status == "running"
+                            ).values(status="failed", error=encode_failure(AnalysisError("WORKER_INTERRUPTED", "The worker process was interrupted. Please retry the analysis.")),
+                                     stage="Worker interrupted", finished_at=now()))
+                            db.commit()
+                    except SQLAlchemyError:
+                        logger.exception("Could not record interrupted job; retrying next iteration")
+                        continue
                 del active[future]
             if broken:
                 pool.shutdown(wait=False, cancel_futures=True)
                 pool = ProcessPoolExecutor(max_workers=settings.max_workers, mp_context=multiprocessing.get_context("spawn"))
             if time.monotonic() - last_recovery > 60:
-                recover_stale()
+                try:
+                    recover_stale()
+                except SQLAlchemyError:
+                    logger.exception("Stale recovery temporarily unavailable")
+                    await asyncio.sleep(1)
+                    continue
                 last_recovery = time.monotonic()
             while len(active) < settings.max_workers:
-                job_id = claim_job()
+                try:
+                    job_id = claim_job()
+                except SQLAlchemyError:
+                    logger.exception("Job claim temporarily unavailable")
+                    break
                 if not job_id:
                     break
-                active[pool.submit(execute_run, job_id)] = job_id
+                try:
+                    active[pool.submit(execute_run, job_id)] = job_id
+                except (BrokenProcessPool, RuntimeError) as exc:
+                    logger.exception("Worker submission failed; replacing the process pool")
+                    # Retain a failed future so recording the failure can itself
+                    # be retried if the database is temporarily unavailable.
+                    failed = Future()
+                    failed.set_exception(exc)
+                    active[failed] = job_id
+                    pool.shutdown(wait=False, cancel_futures=True)
+                    pool = ProcessPoolExecutor(max_workers=settings.max_workers, mp_context=multiprocessing.get_context("spawn"))
+                    break
             await asyncio.sleep(1)
     finally:
         pool.shutdown(wait=False, cancel_futures=True)

@@ -1,5 +1,7 @@
 # Upgrade audit — October 4, 2026
 
+This is the historical functional-upgrade audit. The current severity-ranked maintenance/security audit is [Task 1](TASK_1_AUDIT.md).
+
 The complete tracked application, tests, configuration, deployment, and documentation were inspected before implementation. The working tree was clean; the existing repository remote is the requested GitHub repository.
 
 ## Implementation map

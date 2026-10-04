@@ -1,5 +1,6 @@
 import hashlib
 import io
+import logging
 import re
 import zipfile
 from pathlib import Path, PurePosixPath
@@ -13,6 +14,7 @@ from .db import Dataset, new_id
 from .features import date_columns
 
 PROFILE_VERSION = 4
+logger = logging.getLogger(__name__)
 
 
 def safe_json(value):
@@ -226,8 +228,9 @@ def parse_upload(raw: bytes, filename: str) -> pd.DataFrame:
         raise HTTPException(415, "Upload a CSV or XLSX file.")
     except HTTPException:
         raise
-    except Exception as exc:
-        raise HTTPException(422, f"Could not read the file: {str(exc)[:180]}") from exc
+    except Exception:
+        logger.exception("Dataset parsing failed")
+        raise HTTPException(422, "Could not read the file. Check its CSV or Excel format and encoding.") from None
 
 
 def safe_filename(filename):

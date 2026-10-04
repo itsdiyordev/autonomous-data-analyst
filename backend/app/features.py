@@ -24,6 +24,9 @@ class FeatureEngineer(TransformerMixin, BaseEstimator):
         self.dates = dates
 
     def fit(self, X, y=None):
+        generated = {f"{name}__{suffix}" for name in self.dates for suffix in ("year", "month", "weekday", "month_sin", "month_cos")}
+        if generated.intersection(X.columns):
+            raise ValueError("Source column names conflict with generated date features.")
         self.feature_names_in_ = np.asarray(X.columns, dtype=object)
         self.n_features_in_ = len(X.columns)
         return self

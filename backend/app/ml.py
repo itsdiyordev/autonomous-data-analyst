@@ -33,6 +33,8 @@ from .features import FeatureEngineer, date_columns
 from .llm import grounded_completion
 from .leakage import detect_leakage
 from .model_assessment import calibration, eligibility, imbalance, inference_timing, stability, threshold_analysis
+from .errors import AnalysisError, encode_failure
+from .version import ENGINE_VERSION
 
 logger = logging.getLogger(__name__)
 
@@ -58,14 +60,15 @@ class Cancelled(Exception):
 def update_progress(run_id, progress, stage, detail, **trace):
     with SessionLocal() as db:
         run = db.get(AnalysisRun, run_id)
-        if not run or run.status == "cancelled":
+        if not run or run.status != "running":
             raise Cancelled()
         if run.config.get("analysis_mode") == "autonomous" and stage in {item[0] for item in PIPELINE_STAGES}:
             progress = 50 + int(progress * 0.35)
-        run.progress = max(run.progress, progress)
-        run.stage = stage
-        run.events = [*run.events, {"at": now().isoformat(), "stage": stage, "detail": detail, **trace}]
-        run.updated_at = now()
+        changed = db.execute(update(AnalysisRun).where(AnalysisRun.id == run_id, AnalysisRun.status == "running").values(
+            progress=max(run.progress, progress), stage=stage,
+            events=[*run.events, {"at": now().isoformat(), "stage": stage, "detail": detail, **trace}], updated_at=now()))
+        if changed.rowcount != 1:
+            raise Cancelled()
         db.commit()
 
 
@@ -114,21 +117,29 @@ def calculate_metrics(pipeline, X, y, task, class_count):
     return result
 
 
+def _chronological_cut(dates, fraction):
+    boundaries = np.flatnonzero(dates.to_numpy()[1:] != dates.to_numpy()[:-1]) + 1
+    if not len(boundaries):
+        raise AnalysisError("INVALID_SPLIT", "Chronological splitting needs enough distinct timestamps for separate train, validation and test periods.")
+    return int(boundaries[np.argmin(np.abs(boundaries - int(len(dates) * fraction)))])
+
+
 def split_data(df, target, task, config):
     strategy, column = config.get("split_strategy", "random"), config.get("split_column")
     size = config.get("test_size", 0.2)
     if strategy == "chronological":
         dates = pd.to_datetime(df[column], errors="coerce", utc=True, format="mixed")
         if dates.isna().any():
-            raise ValueError("Choose a complete date column without invalid values.")
-        df = df.assign(__sort_time=dates).sort_values("__sort_time").drop(columns="__sort_time")
-        cut = int(len(df) * (1 - size))
+            raise AnalysisError("INVALID_SPLIT", "Choose a complete date column without invalid values.")
+        order = dates.argsort(kind="stable").to_numpy()
+        df, dates = df.iloc[order], dates.iloc[order]
+        cut = _chronological_cut(dates, 1 - size)
         development, test = df.iloc[:cut], df.iloc[cut:]
-        cut = int(len(development) * 0.8)
+        cut = _chronological_cut(dates.iloc[:cut], 0.8)
         train, validation = development.iloc[:cut], development.iloc[cut:]
     elif strategy == "group":
         if df[column].isna().any() or df[column].nunique() < 5:
-            raise ValueError("Group splitting needs at least five complete groups.")
+            raise AnalysisError("INVALID_SPLIT", "Group splitting needs at least five complete groups.")
         a, b = next(GroupShuffleSplit(n_splits=1, test_size=size, random_state=42).split(df, groups=df[column]))
         development, test = df.iloc[a], df.iloc[b]
         a, b = next(GroupShuffleSplit(n_splits=1, test_size=0.2, random_state=43).split(development, groups=development[column]))
@@ -137,11 +148,11 @@ def split_data(df, target, task, config):
         development, test = train_test_split(df, test_size=size, random_state=42, stratify=df[target] if task == "classification" else None)
         train, validation = train_test_split(development, test_size=0.2, random_state=43, stratify=development[target] if task == "classification" else None)
     if min(len(train), len(validation), len(test)) < 5:
-        raise ValueError("The selected split creates too few rows. Use a larger dataset.")
+        raise AnalysisError("INSUFFICIENT_DATA", "The selected split creates too few rows. Use a larger dataset.")
     if task == "classification":
         classes = set(df[target].unique())
         if any(set(part[target].unique()) != classes for part in (train, validation, test)):
-            raise ValueError("Every split must contain all target classes. Change the split or add examples.")
+            raise AnalysisError("INVALID_SPLIT", "Every split must contain all target classes. Change the split or add examples.")
     return train, validation, test
 
 
@@ -151,7 +162,18 @@ def cv_plan(train, target, task, config):
     y = train[target] if task != "clustering" else None
     if strategy == "chronological":
         splitter, name = TimeSeriesSplit(n_splits=folds), "TimeSeriesSplit"
-        splits = list(splitter.split(train))
+        column = config.get("split_column")
+        if column:
+            dates = pd.to_datetime(train[column], errors="coerce", utc=True, format="mixed")
+            if dates.isna().any() or not dates.is_monotonic_increasing:
+                raise AnalysisError("INVALID_SPLIT", "Chronological cross-validation requires ordered, complete timestamps.")
+            codes, periods = pd.factorize(dates, sort=True)
+            if len(periods) <= folds:
+                return None, {"status": "unavailable", "reason": "Too few distinct training timestamps for chronological cross-validation; selection uses separate validation."}
+            splits = [(np.flatnonzero(np.isin(codes, fitting)), np.flatnonzero(np.isin(codes, validation))) for fitting, validation in splitter.split(periods)]
+        else:
+            # Retain the row-ordered helper contract; API time splits require a column.
+            splits = list(splitter.split(train))
     elif strategy == "group":
         groups = train[config["split_column"]]
         folds = min(folds, groups.nunique())
@@ -209,8 +231,8 @@ def train_run(run_id):
     except Exception as exc:
         logger.exception("Pipeline failed for %s", run_id)
         with SessionLocal() as db:
-            db.execute(update(AnalysisRun).where(AnalysisRun.id == run_id, AnalysisRun.status != "cancelled").values(
-                status="failed", error=str(exc)[:1000], stage="Pipeline failed", finished_at=now()))
+            db.execute(update(AnalysisRun).where(AnalysisRun.id == run_id, AnalysisRun.status == "running").values(
+                status="failed", error=encode_failure(exc), stage="Pipeline failed", finished_at=now()))
             db.commit()
 
 
@@ -228,7 +250,7 @@ def _train(run_id, started, publish=True):
     if target:
         df = df.dropna(subset=[target])
     if len(df) < 40:
-        raise ValueError("At least 40 distinct usable rows are needed for this workflow.")
+        raise AnalysisError("INSUFFICIENT_DATA", "At least 40 distinct usable rows are needed for this workflow.")
     update_progress(run_id, 12, "Problem detector", config.get("problem_detection", {}).get("reason", f"Preparing a {task} workflow."))
     encoder, classes, class_balance = None, [], None
     if task == "classification":
@@ -236,7 +258,7 @@ def _train(run_id, started, publish=True):
         df[target] = df[target].astype(str)
         counts = df[target].value_counts()
         if not 2 <= len(counts) <= 20 or counts.min() < 8:
-            raise ValueError("Classification needs 2–20 classes with at least 8 examples in each.")
+            raise AnalysisError("INVALID_TARGET", "Classification needs 2–20 classes with at least 8 examples in each.")
         class_balance = imbalance(df, target)
         class_balance["original_distribution"] = imbalance(raw, target)["distribution"]
         class_balance["distribution_scope"] = "Usable labeled rows after documented exact-duplicate/target handling; original distribution is stored separately."
@@ -244,7 +266,7 @@ def _train(run_id, started, publish=True):
         if len(counts) == 2:
             positive = config.get("positive_label") or str(counts.index[-1])
             if positive not in counts.index:
-                raise ValueError("The requested positive class is not in the target labels.")
+                raise AnalysisError("INVALID_TARGET", "The requested positive class is not in the target labels.")
             encoder.classes_ = np.asarray([str(label) for label in encoder.classes_ if label != positive] + [positive])
         classes = encoder.classes_.tolist()
         df[target] = encoder.transform(df[target])
@@ -255,7 +277,7 @@ def _train(run_id, started, publish=True):
         df[target] = pd.to_numeric(df[target], errors="coerce")
         df = df.dropna(subset=[target])
         if len(df) < 40 or df[target].nunique() < 2:
-            raise ValueError("Regression needs at least 40 rows with varying numeric target values.")
+            raise AnalysisError("INSUFFICIENT_DATA", "Regression needs at least 40 rows with varying numeric target values.")
     dates = date_columns(df.drop(columns=[target] if target else []))
     excluded, features = [], []
     for column in df.columns:
@@ -275,7 +297,7 @@ def _train(run_id, started, publish=True):
         else:
             features.append(column)
     if not 1 <= len(features) <= 100:
-        raise ValueError("The workflow needs between 1 and 100 usable features after excluding unsuitable columns.")
+        raise AnalysisError("INVALID_FEATURE_SCHEMA", "The workflow needs between 1 and 100 usable features after excluding unsuitable columns.")
     if excluded:
         update_progress(run_id, 18, "Preprocessing engine", "Explicit model-only column exclusions: " + "; ".join(f"{item['feature']}: {item['reason']}" for item in excluded))
     dates = [column for column in dates if column in features]
@@ -283,7 +305,10 @@ def _train(run_id, started, publish=True):
     raw_categorical = [column for column in features if column not in raw_numeric]
     for column in raw_categorical:
         df[column] = df[column].map(lambda value: str(value) if pd.notna(value) else np.nan)
-    engineered = FeatureEngineer(tuple(dates)).fit_transform(df[features].head(100))
+    try:
+        engineered = FeatureEngineer(tuple(dates)).fit_transform(df[features].head(100))
+    except ValueError:
+        raise AnalysisError("INVALID_FEATURE_SCHEMA", "Source column names conflict with generated date features. Rename the conflicting source fields and retry.") from None
     numeric = list(engineered.select_dtypes(include="number").columns)
     categorical = [column for column in engineered.columns if column not in numeric]
     feature_engineering = {"date_columns": dates, "generated_date_features": [column for column in engineered if column not in features],
@@ -313,7 +338,7 @@ def _train(run_id, started, publish=True):
     candidates = model_candidates(task)
     width = len(numeric) * 2 + sum(min(24, int(search[column].nunique())) for column in raw_categorical if column not in dates)
     if width > 1200 or len(df) * width * 8 > 512 * 1024 * 1024:
-        raise ValueError("The encoded feature matrix exceeds the supported 512 MiB / 1,200-input memory contract. Use fewer selected source columns or autonomous exploratory analysis.")
+        raise AnalysisError("RESOURCE_LIMIT", "The encoded feature matrix exceeds the supported 512 MiB / 1,200-input memory contract. Use fewer selected source columns or autonomous exploratory analysis.")
     update_progress(run_id, 25, "Model selector", f"Selected {len(candidates)} candidates: " + ", ".join(dict.fromkeys(candidate[1].replace("_", " ") for candidate in candidates)))
     experiments, fitted = [], {}
     for index, (model_name, family, estimator, parameters) in enumerate(candidates):
@@ -354,10 +379,10 @@ def _train(run_id, started, publish=True):
             experiments[-1]["warnings"] = list(dict.fromkeys(str(item.message)[:250] for item in fit_warnings))
         except Exception as exc:
             logger.warning("Candidate %s failed: %s", model_name, exc)
-            experiments.append({"name": model_name, "family": family, "status": "failed", "error": str(exc)[:250], "parameters": parameters})
+            experiments.append({"name": model_name, "family": family, "status": "failed", "error": "This candidate could not fit or evaluate the supplied data and split.", "parameters": parameters})
     completed = [experiment for experiment in experiments if experiment["status"] == "completed"]
     if not completed:
-        raise ValueError("All model candidates failed. Review the data, target, and split strategy.")
+        raise AnalysisError("MODEL_SEARCH_FAILED", "All model candidates failed. Review the data, target, and split strategy.")
     completed.sort(key=lambda experiment: experiment["selection_score"], reverse=task != "regression")
     winner = completed[0]
     update_progress(run_id, 67, "Model comparison", f"Compared {len(completed)} successful candidates by {'cross-validation mean' if folds else 'validation'} {primary.upper()}.")
@@ -411,9 +436,9 @@ def _train(run_id, started, publish=True):
                          "search_sampling": {"search_rows": len(search), "training_rows": len(train), "seed": 42, "final_refit_full_development": True},
                          "model_limitations": ["Held-out scores do not guarantee future performance or causal effects.", "Fold stability and calibration statuses are transparent heuristics, not confidence probabilities.", "Potential leakage is flagged for review and not automatically removed."],
                          "training_warnings": list(dict.fromkeys([*winner.get("warnings", []), *(str(item.message)[:250] for item in refit_warnings)])),
-                        "split": {"train": len(train), "validation": len(validation), "test": len(test), "strategy": config.get("split_strategy", "random")},
+                        "split": {"train": len(train), "validation": len(validation), "test": len(test), "strategy": config.get("split_strategy", "random"), "equal_timestamp_policy": "kept together across holdouts and CV" if config.get("split_strategy") == "chronological" else "not applicable"},
                         "dataset_fingerprint": fingerprint, "seed": 42, "version": "3.0", "python_version": platform.python_version(),
-                        "sklearn_version": sklearn.__version__, "duration_seconds": round(time.monotonic() - started, 2), "selection_note": selection_note})
+                        "sklearn_version": sklearn.__version__, "engine_version": ENGINE_VERSION, "duration_seconds": round(time.monotonic() - started, 2), "selection_note": selection_note})
     top = ", ".join(item["feature"] for item in feature_importance[:3])
     report = (f"FINAL ANALYSIS REPORT — {name}\n\nGOAL\n{objective}\n\nDATA PROFILE\n{len(raw):,} original rows; {profile['missing_cells']:,} missing cells; {profile['duplicates']:,} duplicates; {profile['outlier_rows']:,} rows with potential IQR outliers. Exact duplicates were removed. Outliers were retained.\n\nPROBLEM\n{task.title()}: {stages[1]['detail']}\n\nPREPARATION\n{len(features)} raw inputs; {len(dates)} date columns with calendar/cyclic features; imputation, missing indicators, encoding, and scaling fit inside each fold.\n\nMODEL COMPARISON\nSelected {winner['name']} from {len(completed)} successful candidates. {selection_note}\n\nTEST RESULTS\n{primary.upper()}: {test_metrics[primary]:.4f}. {len(test):,} unseen rows.\n\nEXPLAINABILITY\nTop permutation-importance features: {top}. SHAP: {shap.get('method', shap.get('reason', 'unavailable'))}, using {shap.get('sample_rows', 0)} test examples. Predictive contributions do not establish causal effects.\n\nERROR ANALYSIS\n{errors.get('note', f'{len(errors["examples"])} representative difficult or incorrect test examples are included in the detailed evidence.')}\n\nDELIVERABLES\nComplete preprocessing + model pipeline, input schema, model comparison, SHAP evidence, error analysis, and standalone prediction script.")
     update_progress(run_id, 94, "Final analysis report", "Writing the natural-language report and packaging the complete ML solution.")

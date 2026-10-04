@@ -99,9 +99,9 @@ def shap_explanation(pipeline, X_background, X_test, task, features):
         return safe_json({"status": "completed", "method": method, "output": output,
                            "sample_rows": len(foreground), "background_rows": len(background),
                            "feature_importance": importance, "examples": examples, "directions": directions})
-    except Exception as exc:
+    except Exception:
         logger.exception("SHAP explanation failed")
-        return {"status": "failed", "reason": str(exc)[:250], "feature_importance": [], "examples": []}
+        return {"status": "failed", "reason": "SHAP could not explain this model on the bounded sample. Other evaluation evidence remains available.", "feature_importance": [], "examples": []}
 
 
 def error_analysis(pipeline, X, y, prediction, task, classes):

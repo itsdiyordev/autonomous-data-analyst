@@ -13,9 +13,11 @@ Every autonomous result stores:
 
 Each registered dataset is immutable and has version 1 within its dataset identity. Reuploading creates another identity; equal uploaded bytes can share the content hash. Cached profiles are lazily upgraded to the current profiling schema without replacing the underlying Parquet dataset.
 
+Task 1 uses engine release **3.0.1**, defined centrally in `app/version.py` and included in analytical configuration hashes. Model-package schema remains 3.0 for compatibility. Older chronological evaluations may have split equal timestamps across holdouts/folds; retain those artifacts and rerun them for corrected timestamp-atomic evaluation rather than treating their prior scores as equivalent to the patch release.
+
 ## Re-run behavior
 
-`POST /api/analysis-runs/{id}/rerun` creates a new owned queued run from stored configuration and objective. It records `parent_run_id` and retains the experiment. Active runs must finish or be cancelled first. An optional `budget_seconds` override intentionally changes the configuration.
+`POST /api/analysis-runs/{id}/rerun` creates a new owned queued run from stored configuration and objective. It records `parent_run_id` before committing queued work and retains the experiment. Active runs must finish or be cancelled first. An optional `budget_seconds` override intentionally changes the configuration.
 
 Analytical values should be equivalent for the same immutable dataset/configuration/versions. Run IDs, timestamps and wall-clock timings differ. Search budgets are wall-clock boundaries between candidates; different hardware/load can change which candidates finish, so exact model-selection equivalence additionally requires the same eligible candidate set to complete. The code never promises bitwise equivalence across scientific-library versions.
 
@@ -38,4 +40,4 @@ From `backend`: `uv run python -m pytest -q` and `uv run ruff check app tests`.
 
 From `frontend`: `npm run build`; with the container running, set `PLAYWRIGHT_BASE_URL=http://localhost:8080` and run `npm run test:e2e`.
 
-On WSL, keep Python environments on the Linux disk filesystem rather than a Windows-mounted folder or RAM-backed `/tmp`, for example `UV_PROJECT_ENVIRONMENT=$HOME/.cache/analytiq-venv`. Bounded tests include an explicit evidence-equivalence re-run and independently executed exported inference.
+On WSL, keep Python environments and Playwright browser/system-library caches on the Linux disk filesystem rather than a Windows-mounted folder or RAM-backed `/tmp`, for example `UV_PROJECT_ENVIRONMENT=$HOME/.cache/analytiq-venv` and `PLAYWRIGHT_BROWSERS_PATH=$HOME/.cache/analytiq-playwright`. Run heavyweight checks sequentially on smaller machines. Bounded tests include an explicit evidence-equivalence re-run and independently executed exported inference.

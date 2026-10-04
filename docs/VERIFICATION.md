@@ -1,5 +1,46 @@
 # Verification record
 
+## Task 1 maintenance verification — engine 3.0.1
+
+Fresh audit baseline started at clean commit `d34c875` on October 4, 2026. Python 3.12.15, Node.js 24.21.0 and Docker Desktop's Linux engine were used.
+
+| Check | Baseline | Fixed release |
+|---|---|---|
+| Backend suite, including security | 57 passed, 3 warnings, 55.95 seconds | **92 passed, 3 warnings, 39.65 seconds** |
+| Ruff | Passed | Passed |
+| Explicit TypeScript check | Passed | Passed |
+| Vite production build | Passed, 746 modules | Passed, 746 modules; also built inside Docker |
+| Chromium E2E | 6 passed in 2.4 minutes after environment recovery | **6 passed in 1.8 minutes** against the fixed image, including invalid-input recovery |
+| Docker build | `analytiq:task1-baseline` built | `analytiq:task1-fixed` and `analytiq:latest` built successfully |
+| Compose | Inspected both definitions | Both `config -q` validations passed |
+| npm advisory scans | Full and production-only scans: no known vulnerabilities | Dependency lock unchanged |
+| Python advisory scan | `pip-audit` installed environment: no known vulnerabilities | Scientific dependency versions unchanged |
+| Deployment/persistence | Existing port-8080 volume inspected; no active jobs | Healthy 3.0.1 deployment; all original records/artifacts preserved |
+
+The fixed image build used `uv sync --frozen` and `npm ci`; application version changes did not update scientific dependencies.
+
+The running deployment uses image ID `sha256:b57426bd2bf9b094f5c8f77aa52806aeeff9fa47ec75f4c389caf212069a0a3e`, non-root user `analyst`, port 8080, `MAX_WORKERS=1` and the existing `analytiq-data:/app/data` mount. It was confirmed running/healthy. Replacement preserved exactly **30 users, 67 datasets, 25 runs, 6 experiments and 18 saved pipelines**. The full four-table row digest remained `a0602893818423b1c2b50ca6b96ed2463e227fddfa50e24ce4a11b02848f3dc5`; all registered dataset files and all completed-run reports/ZIPs/required pipelines existed. A deployment smoke check verified the oldest saved model's prediction/report/package and safe legacy failure redaction through the owned API.
+
+The deployed health endpoint returned `{"status":"ok","version":"3.0.1","llm_enabled":false,"demo_enabled":true}`. Application: **http://localhost:8080**; documentation: **http://localhost:8080/docs**. The QA container on 8081 was stopped after verification.
+
+Added 35 focused regression cases in `backend/tests/test_baseline_regressions.py`, covering safe structured errors/credential redaction, streaming body caps, required JWT claims, scalar inference contracts, blank/legacy names, terminal-state races, broken-pool/transient-database recovery, concurrent quotas, expired limiter capacity, experiment foreign keys, timestamp-atomic splits, feature-name collisions, explicit planner contracts, numeric class roles and rejected uploaded serialized models. Initial focused reproductions failed before their corresponding fixes. The existing desktop browser scenario additionally verifies invalid batch input receives a structured 422, displays the error and recovers to successful prediction.
+
+The first baseline browser attempt stalled under exhausted WSL swap; a launch-only retry then lacked libraries after a WSL restart cleared `/tmp`. Moving/restoring browser dependencies to Linux disk caches resolved both environment problems, and all six baseline workflows passed against the baseline image on isolated QA port 8081. Final QA also uses the isolated test volume and one worker.
+
+Final command from `frontend`:
+
+```bash
+LD_LIBRARY_PATH=$HOME/.cache/analytiq-browser-libs/usr/lib/x86_64-linux-gnu \
+PLAYWRIGHT_BROWSERS_PATH=$HOME/.cache/analytiq-playwright \
+PLAYWRIGHT_BASE_URL=http://127.0.0.1:8081 \
+NODE_OPTIONS=--max-old-space-size=512 \
+npx playwright test --workers=1 --output=/tmp/omnirush/analytiq-task1-final
+```
+
+Additional scan commands: `npm audit --json`, `npm audit --omit=dev --json`, and `pip-audit --path $HOME/.cache/analytiq-venv/lib/python3.12/site-packages --progress-spinner off --format json`. Advisory results are a snapshot, not penetration-test certification. Detailed severity findings and remaining P2/P3 items are in [TASK_1_AUDIT.md](TASK_1_AUDIT.md).
+
+## Historical functional-upgrade verification — engine 3.0.0
+
 Verified on October 4, 2026, in WSL/Linux with Python 3.12.15 and Node.js 24.21.0. The final single-container application reports version **3.0.0** and serves the dashboard/API at **http://localhost:8080**.
 
 ## Results at a glance

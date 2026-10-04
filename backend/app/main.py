@@ -14,8 +14,10 @@ import pandas as pd
 from fastapi import Depends, FastAPI, HTTPException, Query, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
-from fastapi.responses import FileResponse, JSONResponse
-from sqlalchemy import func, select
+from fastapi.responses import FileResponse
+from fastapi.exceptions import RequestValidationError
+from starlette.exceptions import HTTPException as StarletteHTTPException
+from sqlalchemy import func, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -30,6 +32,9 @@ from .problem import detect_problem
 from .planner import create_plan
 from .paths import artifact_file
 from .worker import dispatcher
+from .errors import AnalysisError, error_response, public_failure
+from .security import BodySizeLimitMiddleware
+from .version import ENGINE_VERSION
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -46,35 +51,33 @@ async def lifespan(app):
             await task
 
 
-app = FastAPI(title="Analytiq API", version="3.0.0", lifespan=lifespan)
+app = FastAPI(title="Analytiq API", version=ENGINE_VERSION, lifespan=lifespan)
 app.add_middleware(CORSMiddleware, allow_origins=settings.cors_origins.split(","), allow_credentials=False,
                    allow_methods=["GET", "POST", "DELETE"], allow_headers=["Authorization", "Content-Type"])
 app.add_middleware(GZipMiddleware, minimum_size=1024, compresslevel=5)
+app.add_middleware(BodySizeLimitMiddleware)
 rate_buckets = defaultdict(deque)
 
 
-@app.middleware("http")
-async def request_observability(request: Request, call_next):
-    started = time.perf_counter()
-    request_id = secrets.token_hex(8)
-    length = request.headers.get("content-length")
-    limit = (settings.max_upload_mb + 2) * 1024 * 1024 if request.url.path == "/api/datasets" else 2 * 1024 * 1024
-    if length and (not length.isdigit() or int(length) > limit):
-        return JSONResponse({"detail": "Request body exceeds the allowed size."}, status_code=413)
-    # Bound authentication attempts. An external rate limiter can additionally protect multi-instance deployments.
-    category = "auth" if request.url.path.startswith("/api/auth/") else "chat" if request.url.path.endswith("/chat") else "prediction" if request.url.path.endswith(("/predict", "/scenario")) else "plan" if request.url.path == "/api/analysis-plans" else None
-    if category and request.method == "POST":
-        key = (request.client.host if request.client else "local", category)
-        if key not in rate_buckets and len(rate_buckets) >= 10000:
-            return JSONResponse({"detail": "Request limiter capacity reached. Try again later."}, status_code=429)
-        bucket = rate_buckets[key]
-        current = time.monotonic()
-        while bucket and current - bucket[0] > 60:
-            bucket.popleft()
-        if len(bucket) >= {"auth": 30, "chat": 10, "prediction": 60, "plan": 30}[category]:
-            return JSONResponse({"detail": "Too many attempts. Try again in a minute."}, status_code=429)
-        bucket.append(current)
-    response = await call_next(request)
+@app.exception_handler(StarletteHTTPException)
+async def http_error(request, exc):
+    codes = {400: "INVALID_REQUEST", 401: "UNAUTHENTICATED", 403: "FORBIDDEN", 404: "NOT_FOUND", 409: "CONFLICT", 413: "REQUEST_TOO_LARGE", 415: "UNSUPPORTED_FILE_TYPE", 422: "VALIDATION_ERROR", 429: "RATE_LIMITED", 503: "UNAVAILABLE"}
+    return error_response(exc.status_code, codes.get(exc.status_code, "REQUEST_FAILED"), str(exc.detail), headers=exc.headers)
+
+
+@app.exception_handler(RequestValidationError)
+async def validation_error(request, exc):
+    # Pydantic inputs/contexts can contain plaintext credentials or uploaded data.
+    issues = [{"loc": list(item["loc"]), "msg": item["msg"], "type": item["type"]} for item in exc.errors()]
+    return error_response(422, "VALIDATION_ERROR", "The request contains invalid values.", {"issues": issues}, legacy_detail=issues)
+
+
+@app.exception_handler(AnalysisError)
+async def analytical_error(request, exc):
+    return error_response(422, exc.code, exc.message, exc.details)
+
+
+def observed_response(response, request_id, started):
     response.headers["X-Request-ID"] = request_id
     response.headers["Server-Timing"] = f"api;dur={(time.perf_counter() - started) * 1000:.1f}"
     response.headers["X-Content-Type-Options"] = "nosniff"
@@ -83,8 +86,37 @@ async def request_observability(request: Request, call_next):
     return response
 
 
+@app.middleware("http")
+async def request_observability(request: Request, call_next):
+    started = time.perf_counter()
+    request_id = secrets.token_hex(8)
+    # Bound authentication attempts. An external rate limiter can additionally protect multi-instance deployments.
+    category = "auth" if request.url.path.startswith("/api/auth/") else "chat" if request.url.path.endswith("/chat") else "prediction" if request.url.path.endswith(("/predict", "/scenario")) else "plan" if request.url.path == "/api/analysis-plans" else None
+    if category and request.method == "POST":
+        key = (request.client.host if request.client else "local", category)
+        current = time.monotonic()
+        if key not in rate_buckets and len(rate_buckets) >= 10000:
+            for expired_key, expired_bucket in list(rate_buckets.items()):
+                if not expired_bucket or current - expired_bucket[-1] > 60:
+                    del rate_buckets[expired_key]
+            if len(rate_buckets) >= 10000:
+                return observed_response(error_response(429, "RATE_LIMITED", "Request limiter capacity reached. Try again later."), request_id, started)
+        bucket = rate_buckets[key]
+        while bucket and current - bucket[0] > 60:
+            bucket.popleft()
+        if len(bucket) >= {"auth": 30, "chat": 10, "prediction": 60, "plan": 30}[category]:
+            return observed_response(error_response(429, "RATE_LIMITED", "Too many attempts. Try again in a minute.", headers={"Retry-After": "60"}), request_id, started)
+        bucket.append(current)
+    try:
+        response = await call_next(request)
+    except Exception:
+        logger.exception("Unexpected request failure %s", request_id)
+        response = error_response(500, "INTERNAL_ERROR", "The request could not be completed. Please retry.", {"request_id": request_id})
+    return observed_response(response, request_id, started)
+
+
 def user_view(user):
-    return {"id": user.id, "name": user.name, "email": user.email}
+    return {"id": user.id, "name": user.name.strip() or "Analyst", "email": user.email}
 
 
 def dataset_view(dataset, detailed=False):
@@ -99,11 +131,12 @@ def dataset_view(dataset, detailed=False):
 
 def run_view(run, summary=False):
     result = run.result
+    failure = public_failure(run.error)
     if summary and result:
         result = {key: result.get(key) for key in ("model_name", "task", "target", "primary_metric", "metrics", "cross_validation", "selection_score", "model_stability", "duration_seconds", "dataset_fingerprint")}
     return {"id": run.id, "dataset_id": run.dataset_id, "objective": run.objective, "target": run.target,
             "task": run.task, "status": run.status, "progress": run.progress, "stage": run.stage,
-            "config": {key: value for key, value in run.config.items() if key != "analysis_plan"} if summary else run.config, "events": [] if summary else run.events, "result": result, "error": run.error,
+             "config": {key: value for key, value in run.config.items() if key != "analysis_plan"} if summary else run.config, "events": [] if summary else run.events, "result": result, "error": failure["message"] if failure else None, "failure": failure,
             "created_at": run.created_at.isoformat(), "finished_at": run.finished_at.isoformat() if run.finished_at else None}
 
 
@@ -124,7 +157,7 @@ def owned_run(db, identifier, user):
 @app.get("/api/health")
 def health(db: Session = Depends(get_db)):
     db.execute(select(1))
-    return {"status": "ok", "version": "3.0.0", "llm_enabled": bool(settings.openai_api_key), "demo_enabled": settings.enable_demo}
+    return {"status": "ok", "version": ENGINE_VERSION, "llm_enabled": bool(settings.openai_api_key), "demo_enabled": settings.enable_demo}
 
 
 @app.post("/api/auth/register", status_code=201)
@@ -249,16 +282,25 @@ def chat(dataset_id: str, body: ChatInput, user: User = Depends(current_user), d
 @app.delete("/api/datasets/{dataset_id}", status_code=204)
 def delete_dataset(dataset_id: str, user: User = Depends(current_user), db: Session = Depends(get_db)):
     dataset = owned_dataset(db, dataset_id, user)
-    if db.scalar(select(func.count()).select_from(AnalysisRun).where(AnalysisRun.dataset_id == dataset_id)):
-        raise HTTPException(409, "This dataset is referenced by analysis runs and cannot be deleted.")
+    if (db.scalar(select(func.count()).select_from(AnalysisRun).where(AnalysisRun.dataset_id == dataset_id)) or
+            db.scalar(select(func.count()).select_from(Experiment).where(Experiment.dataset_id == dataset_id))):
+        raise HTTPException(409, "This dataset is referenced by analysis runs or experiments and cannot be deleted.")
     path = Path(dataset.path)
     db.delete(dataset)
-    db.commit()
+    try:
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        raise HTTPException(409, "This dataset was referenced concurrently and cannot be deleted.") from None
     path.unlink(missing_ok=True)
 
 
 @app.post("/api/analysis-runs", status_code=202)
 def create_run(body: RunInput, user: User = Depends(current_user), db: Session = Depends(get_db)):
+    return queue_run(body, user, db)
+
+
+def queue_run(body, user, db, parent_run_id=None):
     dataset = owned_dataset(db, body.dataset_id, user)
     if body.analysis_mode == "autonomous":
         refresh_profile(db, dataset)
@@ -270,12 +312,17 @@ def create_run(body: RunInput, user: User = Depends(current_user), db: Session =
         raise HTTPException(422, str(exc)) from exc
     if body.split_strategy != "random" and (body.split_column not in columns or body.split_column == problem["target"]):
         raise HTTPException(422, "Choose a valid split column that differs from the target.")
+    # A no-op account update obtains a transactional writer/row lock on SQLite
+    # and PostgreSQL, serializing the quota check and insertion per account.
+    db.execute(update(User).where(User.id == user.id).values(name=User.name))
     active = db.scalar(select(func.count()).select_from(AnalysisRun).where(AnalysisRun.owner_id == user.id, AnalysisRun.status.in_(["queued", "running"])))
     if active >= 3:
         raise HTTPException(429, "You already have three active analyses. Wait for one to finish.")
     task = problem["task"]
     config = body.model_dump(exclude={"dataset_id", "objective", "target", "task"})
     config.update(requested_task=body.task, requested_target=body.target)
+    if parent_run_id:
+        config["parent_run_id"] = parent_run_id
     if plan:
         config["analysis_plan"] = plan.model_dump()
     if body.experiment_id:
@@ -319,12 +366,11 @@ def run_detail(run_id: str, user: User = Depends(current_user), db: Session = De
 @app.post("/api/analysis-runs/{run_id}/cancel")
 def cancel_run(run_id: str, user: User = Depends(current_user), db: Session = Depends(get_db)):
     run = owned_run(db, run_id, user)
-    if run.status not in ("queued", "running"):
+    cancelled = db.execute(update(AnalysisRun).where(AnalysisRun.id == run.id, AnalysisRun.status.in_(["queued", "running"])).values(status="cancelled", stage="Cancelled", finished_at=now(), updated_at=now()))
+    if cancelled.rowcount != 1:
         raise HTTPException(409, "Only queued or running analyses can be cancelled.")
-    run.status = "cancelled"
-    run.stage = "Cancelled"
-    run.finished_at = now()
     db.commit()
+    db.refresh(run)
     return run_view(run)
 
 
@@ -337,11 +383,7 @@ def rerun_analysis(run_id: str, body: RerunInput, user: User = Depends(current_u
     values.update(dataset_id=source.dataset_id, objective=source.objective, task=source.config.get("requested_task", source.task), target=source.config.get("requested_target", source.target or None))
     if body.budget_seconds is not None:
         values["budget_seconds"] = body.budget_seconds
-    created = create_run(RunInput(**values), user, db)
-    run = db.get(AnalysisRun, created["id"])
-    run.config = {**run.config, "parent_run_id": source.id}
-    db.commit()
-    return run_view(run)
+    return queue_run(RunInput(**values), user, db, parent_run_id=source.id)
 
 
 @app.get("/api/analysis-runs/{run_id}/download")

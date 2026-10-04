@@ -1,12 +1,19 @@
-from typing import Literal
+from typing import Annotated, Literal
 
 from pydantic import BaseModel, Field, field_validator
+
+Scalar = str | bool | int | Annotated[float, Field(allow_inf_nan=False)] | None
 
 
 class RegisterInput(BaseModel):
     email: str = Field(min_length=5, max_length=255)
     name: str = Field(min_length=2, max_length=100)
     password: str = Field(min_length=8, max_length=128)
+
+    @field_validator("name", mode="before")
+    @classmethod
+    def normalize_name(cls, value):
+        return value.strip() if isinstance(value, str) else value
 
     @field_validator("email")
     @classmethod
@@ -38,7 +45,7 @@ class RunInput(BaseModel):
 
 
 class PredictInput(BaseModel):
-    records: list[dict] = Field(min_length=1, max_length=1000)
+    records: list[dict[str, Scalar]] = Field(min_length=1, max_length=1000)
 
 
 class ChatInput(BaseModel):
@@ -46,8 +53,8 @@ class ChatInput(BaseModel):
 
 
 class ScenarioInput(BaseModel):
-    record: dict
-    changes: dict = Field(min_length=1, max_length=20)
+    record: dict[str, Scalar]
+    changes: dict[str, Scalar] = Field(min_length=1, max_length=20)
 
 
 class ExperimentInput(BaseModel):

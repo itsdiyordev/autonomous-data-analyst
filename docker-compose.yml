@@ -1,0 +1,22 @@
+services:
+  analytiq:
+    build: .
+    image: analytiq:latest
+    container_name: analytiq
+    init: false # The image already includes tini as PID 1.
+    ports:
+      - "8080:8080"
+    environment:
+      MAX_WORKERS: ${MAX_WORKERS:-2}
+      ENABLE_DEMO: ${ENABLE_DEMO:-true}
+      JWT_SECRET: ${JWT_SECRET:-}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      OPENAI_MODEL: ${OPENAI_MODEL:-gpt-4o-mini}
+    volumes:
+      - analytiq-data:/app/data
+    stop_grace_period: 30s
+    restart: unless-stopped
+
+volumes:
+  analytiq-data:
+    name: analytiq-data
